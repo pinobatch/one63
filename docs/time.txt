@@ -7,3 +7,4 @@ Tue 05-17
 
 Wed 05-18
 1 h Make a test track; realize need for a hash table to parse it
+2.5 h Begin hash table
