@@ -3,3 +3,7 @@ Sat 05-07
 
 Tue 05-17
 1 h Make a wavetable mixer
+.25 h Set up VC; plan to write test tracks
+
+Wed 05-18
+1 h Make a test track; realize need for a hash table to parse it
