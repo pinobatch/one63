@@ -1,0 +1,80 @@
+Language is C. Will need GapList library and 16-bit mono LPCM
+wave output.
+
+Audio output
+
+1. Loop one 32-point wave out of 256 at a sample rate 16 to 96 kHz
+2. Define a channel struct
+3. Mix up to 16 such waves
+4. Add LFSR noise
+
+FT loading
+
+1. Prepare a test module
+2. Load N163 waves from text export
+3. Load N163 instruments from text export
+4. Load 2A03 instruments from text export
+5. Load order table and patterns from text export
+
+FT playback
+
+1. Play two N163 notes a tick apart
+2. Play metronome, tracking tempo/groove changes rounding toward 1)
+3. Play 
+4. Play 2A03 note by translating 2A03 state to N163 state
+5. Volume column (inst*volcol/15 rounded toward 1)
+6. Wave envelope
+7. Arpeggio envelope
+8. Arpeggio effect
+9. Pitch envelope
+10. Pitch bend effect
+
+
+
+Preliminary structs
+
+
+// Instcodes include 2A03/MMC5 pulse, 2A03 triangle, 2A03 noise,
+// 2A03 DPCM, VRC6 pulse, VRC6 saw, N163...
+
+// Each instcode has a pool assigned.
+// Pools include 2A03/MMC5, VRC6, SSG, DCSG, N163
+typedef struct {
+  // each may be set to UCHAR_MAX meaning none assigned
+  unsigned char envid_volume;
+  unsigned char envid_arpeggio;
+  unsigned char envid_pitch;
+  unsigned char envid_timbre;
+} FTPSGInstrument;
+
+typedef struct {
+  // fx is an ascii character or UCHAR_MAX for none assigned
+  unsigned char fx, value;
+} FTPatEffect;
+
+typedef struct {
+  // each may be set to UCHAR_MAX for none assigned
+  unsigned char note, instrument, volume, padding0;
+  FTPatEffect effects[MAX_EFFECTS];
+} FTPatRow;
+
+typedef struct {
+  const char *title;  // realloc() on change
+  GapList *order;  // GapList<GapList<uint8_t>> order[row][track]
+  GapList *patterns;  // GapList<GapList<FTPatRow>> patterns[track][orderid]
+  unsigned char start_tempo;
+  unsigned char start_speed;
+  unsigned short rows_per_pattern;
+} FTSong;
+
+typedef struct {
+  FTTrackInstCode instcode;
+} FTTrackDef;
+
+typedef struct {
+  const char *title, *author, *copyright;  // realloc() on change
+  GapList *instcodes;  // GapList<FTTrackDef> instcodes[track]
+  GapList *psg_instruments[NUM_PSG_INST_POOLS];  // GapList<FTPSGInstrument> psg_instruments[poolid];
+// come up with a solution for  GapList *psg_envelopes
+} FTModule;
+
