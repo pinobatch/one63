@@ -7,4 +7,9 @@ Tue 05-17
 
 Wed 05-18
 1 h Make a test track; realize need for a hash table to parse it
-2.5 h Begin hash table
+2.5 h Begin hash table [tentative]
+
+Thu 05-19
+.25 h Collect 2 more test tracks
+
+N.B.: remove time spent on "tentative" items if they don't end up in a deliverable
