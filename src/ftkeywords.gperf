@@ -1,0 +1,30 @@
+%{
+#include "../src/ftkw.h"
+%}
+%language=ANSI-C
+%readonly-tables
+%define hash-function-name ftkw_hash
+%define lookup-function-name ftkw_lookup
+%struct-type
+struct FtKeyword;
+%%
+TITLE,        FTKW_TITLE
+AUTHOR,       FTKW_AUTHOR
+COPYRIGHT,    FTKW_COPYRIGHT
+COMMENT,      FTKW_COMMENT
+MACHINE,      FTKW_MACHINE
+FRAMERATE,    FTKW_FRAMERATE
+EXPANSION,    FTKW_EXPANSION
+VIBRATO,      FTKW_VIBRATO
+SPLIT,        FTKW_SPLIT
+N163CHANNELS, FTKW_N163CHANNELS
+MACRO,        FTKW_MACRO
+MACRON163,    FTKW_MACRON163
+INST2A03,     FTKW_INST2A03
+INSTN163,     FTKW_INSTN163
+N163WAVE,     FTKW_N163WAVE
+TRACK,        FTKW_TRACK
+COLUMNS,      FTKW_COLUMNS
+ORDER,        FTKW_ORDER
+PATTERN,      FTKW_PATTERN
+ROW,          FTKW_ROW

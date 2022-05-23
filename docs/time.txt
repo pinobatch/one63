@@ -12,4 +12,7 @@ Wed 05-18
 Thu 05-19
 .25 h Collect 2 more test tracks
 
+Sun 05-22
+.75 h Build keyword hash function
+
 N.B.: remove time spent on "tentative" items if they don't end up in a deliverable
