@@ -2,7 +2,9 @@
 #include <stdlib.h>
 #include <ctype.h>
 #include "ftkeywords.h"
+#include "ftmodule.h"
 
+#define FT_MIN_CHANNELS 5
 #define FT_MAX_CHANNELS 28
 #define FT_MAX_CHARS_PER_CHANNEL 27
 #define FT_MAX_LINE_LEN (16 + FT_MAX_CHANNELS * FT_MAX_CHARS_PER_CHANNEL)
@@ -28,9 +30,8 @@ const char *const macro_error_msgs[] = {
 /**
  * Calls strtol() up to out_count times.
  * Each long consists of zero or more whitespace characters (which
- * are discarded), 
- * an optional plus or minus sign, an optional base prefix if base
- * is 0, and a sequence of digits.
+ * are discarded), an optional plus or minus sign, an optional base
+ * prefix if base is 0, and a sequence of digits.
  * @param str pointer to a byte string
  * @param str_end if not NULL, pointer to the first character of str
  * from which integers were not read
@@ -78,6 +79,15 @@ int parse_macro(const char *s, long *macro_header, long *macro_data) {
   return strtol_multi(s, &str_end, macro_data, 256, 10);
 }
 
+/**
+ * Parse pattern row data
+ */
+int parse_pattern_row(const char *restrict str, char **restrict str_end,
+                      FTPatRow *restrict outptr, size_t out_count) {
+  if (str_end) *str_end = str;
+  return 0;
+}
+
 int main(void) {
   const char *filename = "parsertest.txt";
   char linebuf[FT_MAX_LINE_LEN];
@@ -121,17 +131,29 @@ int main(void) {
         break;  // Player does not handle very old legacy modules
       case FTKW_COLUMNS:
         break;  // Per-song; internal representation always uses 4 effect columns
-      case FTKW_MACHINE:
-        first_value = strtol(linepos, NULL, 0);
+      case FTKW_MACHINE: {
+        char *str_end;
+        first_value = strtol(linepos, &str_end, 0);
+        if (linepos == str_end) {
+          fprintf(stderr, "%s:%zu: no machine class\n",
+                  filename, linenum);
+          break;
+        }
         if (first_value < 0 || first_value > 1) {
           fprintf(stderr, "%s:%zu: unexpected machine class %ld\n",
                   filename, linenum, first_value);
           break;
         }
         puts(first_value ? "For 2A07 (PAL NES)" : "For 2A03 (NTSC NES)");
-        break;
-      case FTKW_FRAMERATE:
-        first_value = strtol(linepos, NULL, 0);
+      } break;
+      case FTKW_FRAMERATE: {
+        char *str_end;
+        first_value = strtol(linepos, &str_end, 0);
+        if (linepos == str_end) {
+          fprintf(stderr, "%s:%zu: no update rate\n",
+                  filename, linenum);
+          break;
+        }
         if (first_value < 0 || first_value > 400) {
           fprintf(stderr, "%s:%zu: update rate %ld out of range\n",
                   filename, linenum, first_value);
@@ -142,18 +164,35 @@ int main(void) {
         } else {
           puts("Update rate is default for machine");
         }
-        break;
-      case FTKW_EXPANSION:
-        first_value = strtol(linepos, NULL, 0);
+      } break;
+      case FTKW_EXPANSION: {
+        char *str_end;
+        first_value = strtol(linepos, &str_end, 0);
+        if (linepos == str_end) {
+          fprintf(stderr, "%s:%zu: no expansions\n",
+                  filename, linenum);
+          break;
+        }
         for (size_t i = 0; i < 6; ++i) {
           if (first_value & (1 << i)) printf("Uses %s\n", expansion_names[i]);
         }
-        break;
-      case FTKW_N163CHANNELS:
-        first_value = strtol(linepos, NULL, 0);
+      } break;
+      case FTKW_N163CHANNELS: {
+        char *str_end;
+        first_value = strtol(linepos, &str_end, 0);
+        if (linepos == str_end) {
+          fprintf(stderr, "%s:%zu: Namco 163 channel count is blank\n",
+                  filename, linenum);
+          break;
+        }
+        if (first_value < 1 || first_value > 8) {
+          fprintf(stderr, "%s:%zu: Namco 163 channel count %ld out of range (expected 1 to 8)\n",
+                  filename, linenum, first_value);
+          break;
+        }
         printf("First %ld of 8 N163 channels are used\n", first_value);
         // even though all 8 are coded in the ORDER and PATTERNs
-        break;
+      } break;
       case FTKW_MACRO: {
         long macro_header[5];
         long macro_data[256];
@@ -218,7 +257,16 @@ int main(void) {
           fprintf(stderr, "%s:%zu: %s: expected 2 params\n", filename, linenum, kw->name);
           break;
         }
-        nvalues = strtol_multi(linepos, &str_end, wave_data, 2, 10);
+        while (*linepos && isspace(*linepos)) ++linepos;  // eat colon
+        if (*linepos++ != ':') {
+          fprintf(stderr, "%s:%zu: missing colon after params\n", filename, linenum);
+          break;
+        }
+        nvalues = strtol_multi(linepos, &str_end, wave_data, 240, 10);
+        if (nvalues < 4 || nvalues >= 240) {
+          fprintf(stderr, "%s:%zu: N163 wave has %ld steps (expected 2 to 240)\n", filename, linenum, nvalues);
+          break;
+        }
         printf("N163 instrument %ld wave %ld with %ld steps\n",
                wave_header[0], wave_header[1], nvalues);
       } break;
@@ -238,18 +286,55 @@ int main(void) {
         printf("Add song, %ld rows per pattern, speed %ld, tempo %ld\n",
                track_header[0], track_header[1], track_header[2]);
       } break;
-      case FTKW_ORDER:
+      case FTKW_ORDER: {
         // hypermeasure id then colon then as many as there are rows in all chips
-        fprintf(stderr, "%s:%zu: %s not yet handled\n", filename, linenum, kw->name);
-        break;
-      case FTKW_PATTERN:
-        first_value = strtol(linepos, NULL, 16);
-        fprintf(stderr, "%s:%zu: will write rows to pattern %02lx\n", filename, linenum, first_value);
-        break;
-      case FTKW_ROW:
+        long pattern_ids[FT_MAX_CHANNELS];
+        char *str_end;
+        first_value = strtol(linepos, &str_end, 16);
+        if (linepos == str_end) {
+          fprintf(stderr, "%s:%zu: no order ID\n", filename, linenum);
+          break;
+        }
+        linepos = str_end;
+        while (*linepos && isspace(*linepos)) ++linepos;  // eat colon
+        if (*linepos++ != ':') {
+          fprintf(stderr, "%s:%zu: missing colon after params\n", filename, linenum);
+          break;
+        }
+
+        size_t ncols = strtol_multi(linepos, &str_end, pattern_ids, FT_MAX_CHANNELS, 16);
+        if (ncols < FT_MIN_CHANNELS || ncols > FT_MAX_CHANNELS) {
+          fprintf(stderr, "%s:%zu: order row length out of range\n", filename, linenum);
+          break;
+        }
+        printf("order row $%02lx:", first_value);
+        for (size_t i = 0; i < ncols; ++i) {
+          printf(" %02lx", pattern_ids[i]);
+        }
+        putchar('\n');
+      } break;
+      case FTKW_PATTERN: {
+        char *str_end;
+        first_value = strtol(linepos, &str_end, 16);
+        if (linepos == str_end) {
+          fprintf(stderr, "%s:%zu: no pattern ID\n",
+                  filename, linenum);
+          break;
+        }
+        printf("Writing rows to last track's pattern 0x%02lx\n", first_value);
+      } break;
+      case FTKW_ROW: {
         // hex row ID, then colon, then colon-separated row contents
-        fprintf(stderr, "%s:%zu: %s not yet handled\n", filename, linenum, kw->name);
-        break;
+        char *str_end;
+        first_value = strtol(linepos, &str_end, 16);
+        if (linepos == str_end) {
+          fprintf(stderr, "%s:%zu: no pattern ID\n", filename, linenum);
+          break;
+        }
+        linepos = str_end;
+
+        fprintf(stderr, "%s:%zu: pattern row %02lx not yet handled\n", filename, linenum, first_value);
+      } break;
     }
   }
 
