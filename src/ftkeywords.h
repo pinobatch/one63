@@ -1,5 +1,9 @@
+#ifndef FTKEYWORDS_H
+#define FTKEYWORDS_H
+
 #include <string.h>
-enum FtKeywords {
+enum FtKeywordID {
+  FTKW_NULL,
   FTKW_TITLE,
   FTKW_AUTHOR,
   FTKW_COPYRIGHT,
@@ -23,5 +27,9 @@ enum FtKeywords {
 };
 struct FtKeyword {
   const char *name;
-  unsigned int kwid;
+  enum FtKeywordID kwid;
 };
+const struct FtKeyword *
+ftkw_lookup (register const char *str, register size_t len);
+
+#endif

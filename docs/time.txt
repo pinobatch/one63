@@ -15,4 +15,15 @@ Thu 05-19
 Sun 05-22
 .75 h Build keyword hash function
 
+Thu 05-26
+3 h Parse instrument data in a FamiTracker text export
+
 N.B.: remove time spent on "tentative" items if they don't end up in a deliverable
+
+immediate next steps
+--------------------
+Parse sequence data (ORDER)
+Parse sequence data (ROW)
+Stuff instrument data into a struct
+Stuff track data into a struct
+Make hash table to look up instruments and macros

@@ -1,7 +1,8 @@
 %{
-#include "../src/ftkw.h"
+#include "../src/ftkeywords.h"
 %}
 %language=ANSI-C
+%compare-strncmp
 %readonly-tables
 %define hash-function-name ftkw_hash
 %define lookup-function-name ftkw_lookup

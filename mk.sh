@@ -2,9 +2,14 @@
 set -e
 mkdir -p build
 
+# Don't turn on missing-field-initializers because the wordlist array
+# in gperf's output contains missing field initializers for each hash
+# table entry that does not correspond to a keyword.
+CWARN="-Wall -Wextra -Wno-missing-field-initializers"
+
 run_mixer()
 {
-  gcc -Wall -Wextra -Os -fsanitize=undefined -o mixer src/mixer.c src/canonwav.c
+  gcc $CWARN -Os -fsanitize=undefined -o mixer src/mixer.c src/canonwav.c
   ./mixer
   paplay out.wav
 }
@@ -12,7 +17,8 @@ run_mixer()
 run_parser()
 {
   gperf --output-file=build/ftkeywords.c src/ftkeywords.gperf
-  less build/ftkeywords.c
+  gcc $CWARN -Os -fsanitize=undefined -o ftparse src/ftparse.c build/ftkeywords.c
+  ./ftparse
 }
 
-run_mixer
+run_parser
