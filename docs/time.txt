@@ -18,11 +18,15 @@ Sun 05-22
 Thu 05-26
 3.5 h Parse instrument and order data in a FamiTracker text export
 
+Mon 05-30
+1 h Parse pattern note, instrument, and volume
+
 N.B.: remove time spent on "tentative" items if they don't end up in a deliverable
 
 immediate next steps
 --------------------
-Parse sequence data (ROW)
+Parse sequence effect data
+Ensure the whole row is parsed
 Stuff instrument data into a struct
 Stuff track data into a struct
 Make hash table to look up instruments and macros

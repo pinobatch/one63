@@ -8,6 +8,14 @@ typedef struct {
   unsigned char fx, value;
 } FTPatEffect;
 
+#define FTNOTE_RELEASE 126
+#define FTNOTE_CUT 127
+#define FTNOTE_WAIT 255
+#define FTINST_LEGATO 254
+#define FTINST_NONE 255
+#define FTVOLCOL_MAX 15
+#define FTVOLCOL_NONE 255
+
 typedef struct {
   // Note 0-95: C-0 through B-7; 126: release; 127: cut; 255: hold
   // Instrument 0-127: instrument 00-7F; 254: &&; 255: unspecified

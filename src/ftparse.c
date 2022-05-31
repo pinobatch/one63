@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <ctype.h>
+#include <limits.h>
 #include "ftkeywords.h"
 #include "ftmodule.h"
 
@@ -8,6 +9,7 @@
 #define FT_MAX_CHANNELS 28
 #define FT_MAX_CHARS_PER_CHANNEL 27
 #define FT_MAX_LINE_LEN (16 + FT_MAX_CHANNELS * FT_MAX_CHARS_PER_CHANNEL)
+#define FT_MAX_OCTAVE 7
 
 const char WHITESPACE_CHARACTERS[] = " \t\n\v\f\r";
 
@@ -19,11 +21,26 @@ const char *const macro_dim_names[] = {
   "volume", "arpeggio", "pitch", "hi-pitch", "timbre"
 };
 
-const char *const macro_error_msgs[] = {
+const char *const syntax_error_msgs[] = {
   "unknown error",
   "not enough header values (expected 5)",
-  "dimension out of range (expected 0-4)",
+  "macro dimension out of range (expected 0 through 4)",
   "expected colon after header values",
+  "unknown note letter (expected A through G, ., -, or =)",
+  "unknown accidental (expected -, #, or b)",
+  "unknown octave (expected 0 through 7)",
+  "NUL in pattern pitch",
+  "NUL in pattern instrument ID",
+  "unknown instrument (expected 00-FF, &&, or ..)",
+
+  "NUL in volume", // 10
+  "unknown volume (expected 0 through F or .)",
+  "NUL in effect", // WITHIN effect; NUL at end of effect is end of row
+  "unknown effect parameter (expected 0 through F or .)",
+};
+
+const unsigned char letter_to_semitone['G' - 'A' + 1] = {
+  9, 11, 0, 2, 4, 5, 7
 };
 
 
@@ -32,8 +49,8 @@ const char *const macro_error_msgs[] = {
  * Each long consists of zero or more whitespace characters (which
  * are discarded), an optional plus or minus sign, an optional base
  * prefix if base is 0, and a sequence of digits.
- * @param str pointer to a byte string
- * @param str_end if not NULL, pointer to the first character of str
+ * @param s pointer to a byte string
+ * @param str_end if not NULL, pointer to the first character of s
  * from which integers were not read
  * @param outptr where to write integers read from the string
  * @param out_count maximum number of integers to read
@@ -41,19 +58,19 @@ const char *const macro_error_msgs[] = {
  * recognize base prefixes "0" and "0x"
  * @return number of valid integers read
  */
-size_t strtol_multi(const char *restrict str, char **restrict str_end,
+size_t strtol_multi(const char *restrict s, char **restrict str_end,
                     long *restrict outptr, size_t out_count, int base) {
   size_t num_read = 0;
   
   while (num_read < out_count) {
     char *this_str_end;
-    long value = strtol(str, &this_str_end, base);
-    if (str == this_str_end) break;  // integer was not read
+    long value = strtol(s, &this_str_end, base);
+    if (s == this_str_end) break;  // integer was not read
     if (outptr) *outptr++ = value;
     ++num_read;
-    str = this_str_end;
+    s = this_str_end;
   }
-  if (str_end) *str_end = (char *)str;
+  if (str_end) *str_end = (char *)s;
   return num_read;
 }
 
@@ -79,13 +96,112 @@ int parse_macro(const char *s, long *macro_header, long *macro_data) {
   return strtol_multi(s, &str_end, macro_data, 256, 10);
 }
 
+int parsexdigit(int ch) {
+  if (isdigit(ch)) return ch - '0';
+  if (!isxdigit(ch)) return -1;
+  return toupper(ch) - 'A' + 10;
+}
+
+int parse_pattern_effects(const char *restrict s, char **restrict str_end,
+                          FTPatEffect *restrict outptr, size_t out_count) {
+  if (str_end) *str_end = (char *)s;
+  (void) outptr;
+  (void) out_count;
+  return 0;
+}
+
 /**
  * Parse pattern row data
+ * @return number of columns read for good macro,
+ * or <0 for bad macro
  */
-int parse_pattern_row(const char *restrict str, char **restrict str_end,
+int parse_pattern_row(const char *restrict s, char **restrict str_end,
                       FTPatRow *restrict outptr, size_t out_count) {
-  if (str_end) *str_end = str;
-  return 0;
+  size_t num_read = 0;
+//  fprintf(stderr, "parse_pattern_row %s\nmax %zu columns\n", s, out_count);
+
+  while (num_read < out_count && num_read < INT_MAX) {
+    // Eat space, colon, space
+    while (*s && isspace(*s)) ++s;
+    if (!*s) break;
+    if (*s++ != ':') return -3;
+    while (*s && isspace(*s)) ++s;
+    // Parse pitch value
+    int note_letter = *s++, semitone = 255;
+    if (note_letter == '.') {
+      semitone = FTNOTE_WAIT;
+      if (!*s++) return -7;
+      if (!*s++) return -7;
+    } else if (note_letter == '-') {
+      semitone = FTNOTE_CUT;
+      if (!*s++) return -7;
+      if (!*s++) return -7;
+    } else if (note_letter == '=') {
+      semitone = FTNOTE_RELEASE;
+      if (!*s++) return -7;
+      if (!*s++) return -7;
+    } else if (note_letter >= 'A' && note_letter <= 'G') {
+      semitone = letter_to_semitone[note_letter - 'A'];
+      int accidental = *s++;
+      switch (accidental) {
+        case '-': break;
+        case '#': semitone += 1; break;
+        case 'b': semitone -= 1; break;
+        default: fprintf(stderr, "unknown accidental '%c'\n", accidental); return -5;
+      }
+      int octave = *s++, octave_amt = 0;
+      if (octave >= '0' && octave <= '7') {
+        semitone += (octave - '0') * 12;
+      } else {
+        fprintf(stderr, "unknown octave '%c'\n", octave); return -6;
+      }
+      printf("note %c%c%c, semitone %d\n",
+             note_letter, accidental, octave, semitone);
+    } else {
+      printf("unknown note letter: '%c'\n", note_letter);
+      return -4;
+    }
+    // Parse instrument
+    while (*s && isspace(*s)) ++s;
+    int insthi = *s++, instrument;
+    if (!insthi) return -8;
+    int instlo = *s++;
+    if (!instlo) return -8;
+    if (insthi == '&') {
+      instrument = FTINST_LEGATO;
+    } else if (insthi == '.') {
+      instrument = FTINST_NONE;
+    } else {
+      insthi = parsexdigit(insthi);
+      instlo = parsexdigit(instlo);
+      if (insthi >= 0 && instlo >= 0) {
+        instrument = insthi * 16 + instlo;
+      } else {
+        fprintf(stderr, "unknown instrument %c%c\n", insthi, instlo);
+        return -9;
+      }
+      printf("instrument %02X\n", instrument);
+    }
+    // Parse volume
+    while (*s && isspace(*s)) ++s;
+    int volumedigit = *s++, volume = FTVOLCOL_NONE;
+    if (!volumedigit) return -10;
+    if (volumedigit != '.') {
+      volume = parsexdigit(volumedigit);
+      if (volume < 0) {
+        fprintf(stderr, "unknown volume %c\n", volumedigit);
+        return -11;
+      }
+      printf("volume %X\n", volume);
+    } else {
+      printf("no volume\n");
+    }
+    // TODO: Parse effects for real
+    while (*s && *s != ':') ++s;
+    
+    if (str_end) *str_end = (char *)s;
+  }
+  return num_read;
 }
 
 int main(void) {
@@ -200,7 +316,7 @@ int main(void) {
         if (first_value < 0) {
           size_t msgid = first_value >= -3 ? -first_value : 0;
           fprintf(stderr, "%s:%zu: %s: %s\n",
-                  filename, linenum, kw->name, macro_error_msgs[msgid]);
+                  filename, linenum, kw->name, syntax_error_msgs[msgid]);
           break;
         }
         printf("2A03 %s macro %ld macro with %ld steps\n",
@@ -213,7 +329,7 @@ int main(void) {
         if (first_value < 0) {
           size_t msgid = first_value >= -3 ? -first_value : 0;
           fprintf(stderr, "%s:%zu: %s: %s\n",
-                  filename, linenum, kw->name, macro_error_msgs[msgid]);
+                  filename, linenum, kw->name, syntax_error_msgs[msgid]);
           break;
         }
         printf("N163 %s macro %ld with %ld steps\n",
@@ -332,6 +448,11 @@ int main(void) {
           break;
         }
         linepos = str_end;
+        
+        FTPatRow row[FT_MAX_CHANNELS];
+        size_t nvalues = parse_pattern_row(linepos, &str_end,
+                                           row, sizeof row/sizeof row[0]);
+        (void)nvalues;
 
         fprintf(stderr, "%s:%zu: pattern row %02lx not yet handled\n", filename, linenum, first_value);
       } break;
