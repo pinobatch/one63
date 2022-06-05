@@ -24,6 +24,7 @@ Mon 05-30
 Sun 06-05
 1.75 h Parse effects; parse note, instrument, and volume all the way through a nontrivial piece
 .25 h Ensure proposed structs compile
+3 h Stuff macro, instrument, and wave data into a struct
 
 N.B.: remove time spent on "tentative" items if they don't end up in a deliverable
 

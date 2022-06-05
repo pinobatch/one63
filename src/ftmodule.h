@@ -4,16 +4,8 @@
 
 // Instruments //////////////////////////////////////////////////////
 
-enum FTEnvPoolID {
-  FTENVPOOL_VRC6   = 0,
-  FTENVPOOL_VRC7   = 1,
-  FTENVPOOL_FDS    = 2,
-  FTENVPOOL_MMC5   = 3,
-  FTENVPOOL_N163   = 4,
-  FTENVPOOL_YM2149 = 5,
-  FT_NUM_ENVPOOLS  = 6,
-  FTENVPOOL_2A03 = FTENVPOOL_MMC5
-};
+#define FTENV_MAX_TICKS 255
+#define FTN163_MAX_WAVE 240
 
 enum FTEnvPoolID {
   FTENVPOOL_VRC6   = 0,
@@ -27,13 +19,28 @@ enum FTEnvPoolID {
 };
 
 typedef struct {
+  unsigned char chipid;  // chipid and envid match those in FTEnvelope
   // each may be set to UCHAR_MAX meaning none assigned
   unsigned char envid_volume;
   unsigned char envid_arpeggio;
   unsigned char envid_pitch;
+  // not supporting hi-pitch because arpeggio is more stable
+  unsigned char padding0;
   unsigned char envid_timbre;
-  // we are not supporting hi-pitch because arpeggio is more stable
+
+  // ancillary data for each instrument
+  // for N163, waves is a GapList<char[waveram_length]>
+  unsigned char waveram_length;
+  unsigned char waveram_address;
+  GapList *waves;
 } FTPSGInstrument;
+
+typedef struct {
+  unsigned char chipid, parameter, envid;  // these form the key
+  unsigned char padding0;
+  unsigned char loop_point, release_point, arpeggio_sense, env_length;
+  unsigned char env_data[];
+} FTEnvelope;
 
 // Patterns /////////////////////////////////////////////////////////
 
@@ -67,7 +74,7 @@ typedef struct {
 // Top level ////////////////////////////////////////////////////////
 
 typedef struct {
-  const char *title;  // realloc() on change
+  char *title;  // owned; realloc() on change
   GapList *order;  // GapList<GapList<uint8_t>> order[row][track]
   GapList *patterns;  // GapList<GapList<FTPatRow>> patterns[track][orderid]
   unsigned char start_tempo;
@@ -76,11 +83,19 @@ typedef struct {
 } FTSong;
 
 typedef struct {
-  const char *title, *author, *copyright;  // realloc() on change
-  GapList *instcodes;  // GapList<FTTrackDef> instcodes[track]
-  GapList *psg_instruments[FT_NUM_ENVPOOLS];  // GapList<FTPSGInstrument> psg_instruments[poolid];
-  GapList *songs;
-// come up with a solution for  GapList *psg_envelopes
+  char *title, *author, *copyright;  // owned; realloc() on change
+  unsigned char tvSystem;
+  unsigned char expansion;
+  unsigned char wsgNumChannels;  // channels after this are muted
+  unsigned char padding1;
+  unsigned int tickRate;
+  // to be restored once I remember what FTTrackDef was
+  // perhaps once I get to synthesis
+//  GapList *instcodes;  // GapList<FTTrackDef> instcodes[track]
+  GapList *instruments;  // GapList<FTPSGInstrument> psg_instruments[instid]
+  GapList *all_envelopes;  // GapList<FTEnvelope *> all_envelopes[dedupeid]
+  GapList *songs;  // GapList<FTSong> songs[songid];
+  // TODO: come up with a solution for envelope lookup
 } FTModule;
 
 #endif

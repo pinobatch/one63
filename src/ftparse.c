@@ -82,7 +82,8 @@ size_t strtol_multi(const char *restrict s, char **restrict str_end,
  * @return 0 for empty macro, step count (>0) for good macro,
  * or <0 for bad macro
  */
-int parse_macro(const char *s, long *macro_header, long *macro_data) {
+int parse_macro(const char *restrict s,
+                long *restrict macro_header, long *restrict macro_data) {
   // 5 ints (parameter, macro ID, loop point, release point, arpeggio sense)
   // then colon then macro contents
   char *str_end;
@@ -268,17 +269,144 @@ void dump_pattern_row(const FTPatRow *row, size_t count) {
   putchar('\n');
 }
 
-int main(void) {
-  const char *filename = "parsertest.txt";
-//  const char *filename = "audio-private/draft.txt";
+void dump_expansion(unsigned int expansion) {
+  if (!expansion) puts("2A03-only module");
+  for (size_t i = 0; i < 6; ++i) {
+    if (expansion & (1 << i)) printf("Uses %s\n", expansion_names[i]);
+  }
+}
+
+void hexdump(const void *restrict start, size_t length, FILE *restrict fp) {
+  size_t chars_this_line = 0;
+  const unsigned char *s = start;
+  for (size_t i = 0; i < length; ++i) {
+    fprintf(fp, "%02x ", *s++);
+    if (++chars_this_line >= 16) {
+      fputc('\n', fp);
+      chars_this_line = 0;
+    }
+  }
+  if (chars_this_line) fputc('\n', fp);
+}
+
+void FTModule_delete(FTModule *module) {
+  if (!module) return;
+  free(module->title);
+  free(module->author);
+  free(module->copyright);
+  Gap_delete(module->songs);
+  // Delete wave RAM data if any
+  if (module->instruments) {
+    while (!Gap_isEmpty(module->instruments)) {
+      FTPSGInstrument *ws = Gap_get(module->instruments, 0);
+      Gap_delete(ws->waves);
+      Gap_remove(module->instruments, 0);
+    }
+    Gap_delete(module->instruments);
+  }
+  // Delete envelope data if any
+  if (module->all_envelopes) {
+    while (!Gap_isEmpty(module->all_envelopes)) {
+      FTEnvelope **ws = Gap_get(module->all_envelopes, 0);
+      free(*ws);
+      Gap_remove(module->all_envelopes, 0);
+    }
+    Gap_delete(module->all_envelopes);
+  }
+  free(module);
+}
+
+#define EXPECTED_INSTS 16
+#define EXPECTED_ENVS_PER_INST 2
+#define EXPECTED_SONGS 16
+
+FTModule *FTModule_new(void) {
+  FTModule *module = calloc(1, sizeof(FTModule));
+  if (!module) return 0;
+  // Clear pointers manually (in case (void *)0 isn't bitwise 0)
+  module->title = 0;
+  module->author = 0;
+  module->copyright = 0;
+  // Allocate dynamic arrays
+  module->instruments = Gap_new(sizeof(FTPSGInstrument), EXPECTED_INSTS);
+  module->all_envelopes
+    = Gap_new(sizeof(FTEnvelope *), EXPECTED_INSTS * EXPECTED_ENVS_PER_INST);
+  module->songs = Gap_new(sizeof(FTSong), EXPECTED_SONGS);
+  if (!module->songs || !module->instruments || !module->all_envelopes) {
+    FTModule_delete(module);
+    return 0;
+  }
+  return module;
+}
+
+/**
+ * Allocates an envelope (or sequence or macro) as a struct with a
+ * flexible member.  Caller must free.  Takes longs to interoperate
+ * with strtol_multi().
+ * @param header a 5-tuple of (long[]){parameter, envelope ID,
+ * loop point, release point, arpeggio sense}
+ * @param env_data value for each tick
+ * @param env_length number of ticks
+ */
+FTEnvelope *FTModule_pack_env(const long *restrict header,
+                              const long *restrict env_data, size_t env_length) {
+  if (env_length > FTENV_MAX_TICKS) return 0;
+  FTEnvelope *env = malloc(sizeof(FTEnvelope) + env_length);
+  if (!env) return 0;
+  env->chipid = FTENVPOOL_MMC5;
+  env->parameter = header[0];
+  env->envid = header[1];
+  env->loop_point = header[2] >= 0 ? header[2] : 255;
+  env->release_point = header[3] >= 0 ? header[3] : 255;
+  env->arpeggio_sense = header[4];
+  env->env_length = env_length;
+  for (size_t i = 0; i < env_length; ++i) env->env_data[i] = env_data[i];
+  return env;
+}
+
+/**
+ * Inserts blank instruments until at least inst+1 instruments
+ * are present then returns Gap_get(instruments, instid).
+ */
+FTPSGInstrument *FTModule_get_instrument(FTModule *module, size_t instid) {
+  if (!module || !module->instruments) return 0;
+  static const FTPSGInstrument null_instrument =
+    {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0};
+  while (Gap_size(module->instruments) <= instid) {
+    if (!Gap_add(module->instruments, &null_instrument)) return 0;
+  }
+  return Gap_get(module->instruments, instid);
+}
+
+/**
+ * Inserts blank waves into instrument instid until at least waveid+1
+ * waves are present then returns Gap_get(waves, waveid).
+ * @param elSize if not null, the size of each wave is written here
+ */
+unsigned char *FTModule_get_wave(FTModule *module, size_t instid,
+                                 size_t waveid, size_t *elSize) {
+  FTPSGInstrument *inst = FTModule_get_instrument(module, instid);
+  if (!inst || !inst->waves) return 0;
+  static const char null_wave[FTN163_MAX_WAVE];
+  while (Gap_size(inst->waves) <= waveid) {
+    if (!Gap_add(inst->waves, null_wave)) return 0;
+  }
+  if (elSize) *elSize = Gap_elSize(inst->waves);
+  return Gap_get(inst->waves, waveid);
+}
+
+
+/**
+ * @param infp a text file
+ * @param filename a filename to display in error messages
+ */
+FTModule *FTModule_fromtxt(FILE *restrict infp, const char *restrict filename) {
+  if (!filename) filename = "<input>";
+  FTModule *module = FTModule_new();
+  if (!module) return 0;
   char linebuf[FT_MAX_LINE_LEN];
   size_t linenum = 0;
   
-  FILE *infp = fopen(filename, "r");
-  if (!infp) {
-    perror(filename);
-    return EXIT_FAILURE;
-  }
   while (fgets(linebuf, sizeof linebuf, infp)) {
     linenum += 1;
     // Strip leading whitespace
@@ -305,7 +433,7 @@ int main(void) {
       case FTKW_TITLE:
       case FTKW_AUTHOR:
       case FTKW_COPYRIGHT:
-      case FTKW_COMMENT:
+      case FTKW_COMMENT:  // this'll be tricky because multiline
       case FTKW_SPLIT:
         break;  // Ignore metadata for now
       case FTKW_VIBRATO:
@@ -316,7 +444,7 @@ int main(void) {
         char *str_end;
         first_value = strtol(linepos, &str_end, 0);
         if (linepos == str_end) {
-          fprintf(stderr, "%s:%zu: no machine class\n",
+          fprintf(stderr, "%s:%zu: machine class is blank\n",
                   filename, linenum);
           break;
         }
@@ -325,38 +453,30 @@ int main(void) {
                   filename, linenum, first_value);
           break;
         }
-        puts(first_value ? "For 2A07 (PAL NES)" : "For 2A03 (NTSC NES)");
+        module->tvSystem = first_value;
       } break;
       case FTKW_FRAMERATE: {
         char *str_end;
         first_value = strtol(linepos, &str_end, 0);
         if (linepos == str_end) {
-          fprintf(stderr, "%s:%zu: no update rate\n",
-                  filename, linenum);
+          fprintf(stderr, "%s:%zu: update rate is blank\n", filename, linenum);
           break;
         }
-        if (first_value < 0 || first_value > 400) {
+        if (first_value < 0 || first_value > 800) {
           fprintf(stderr, "%s:%zu: update rate %ld out of range\n",
                   filename, linenum, first_value);
           break;
         }
-        if (first_value) {
-          printf("Update rate is %ld Hz\n", first_value);
-        } else {
-          puts("Update rate is default for machine");
-        }
+        module->tickRate = first_value;
       } break;
       case FTKW_EXPANSION: {
         char *str_end;
         first_value = strtol(linepos, &str_end, 0);
         if (linepos == str_end) {
-          fprintf(stderr, "%s:%zu: no expansions\n",
-                  filename, linenum);
+          fprintf(stderr, "%s:%zu: expansion flags is blank\n", filename, linenum);
           break;
         }
-        for (size_t i = 0; i < 6; ++i) {
-          if (first_value & (1 << i)) printf("Uses %s\n", expansion_names[i]);
-        }
+        module->expansion = first_value;
       } break;
       case FTKW_N163CHANNELS: {
         char *str_end;
@@ -371,34 +491,40 @@ int main(void) {
                   filename, linenum, first_value);
           break;
         }
-        printf("First %ld of 8 N163 channels are used\n", first_value);
-        // even though all 8 are coded in the ORDER and PATTERNs
+        module->wsgNumChannels = first_value;
       } break;
       case FTKW_MACRO: {
         long macro_header[5];
         long macro_data[256];
-        first_value = parse_macro(linepos, macro_header, macro_data);
-        if (first_value < 0) {
-          size_t msgid = first_value >= -3 ? -first_value : 0;
+        int nvalues = parse_macro(linepos, macro_header, macro_data);
+        if (nvalues < 0) {
+          size_t msgid = nvalues >= -3 ? -nvalues : 0;
           fprintf(stderr, "%s:%zu: %s: %s\n",
                   filename, linenum, kw->name, syntax_error_msgs[msgid]);
           break;
         }
-        printf("2A03 %s macro %ld macro with %ld steps\n",
-               macro_dim_names[macro_header[0]], macro_header[1], first_value);
+        FTEnvelope *macro = FTModule_pack_env(macro_header, macro_data, nvalues);
+        if (!macro || !Gap_add(module->all_envelopes, &macro)) {
+          fprintf(stderr, "%s:%zu: %s: out of memory\n", filename, linenum, kw->name);
+          break;
+        }
       } break;
       case FTKW_MACRON163: {
         long macro_header[5];
         long macro_data[256];
-        first_value = parse_macro(linepos, macro_header, macro_data);
-        if (first_value < 0) {
-          size_t msgid = first_value >= -3 ? -first_value : 0;
+        int nvalues = parse_macro(linepos, macro_header, macro_data);
+        if (nvalues < 0) {
+          size_t msgid = nvalues >= -3 ? -nvalues : 0;
           fprintf(stderr, "%s:%zu: %s: %s\n",
                   filename, linenum, kw->name, syntax_error_msgs[msgid]);
           break;
         }
-        printf("N163 %s macro %ld with %ld steps\n",
-               macro_dim_names[macro_header[0]], macro_header[1], first_value);
+        FTEnvelope *macro = FTModule_pack_env(macro_header, macro_data, nvalues);
+        if (macro) macro->chipid = FTENVPOOL_N163;
+        if (!macro || !Gap_add(module->all_envelopes, &macro)) {
+          fprintf(stderr, "%s:%zu: %s: out of memory\n", filename, linenum, kw->name);
+          break;
+        }
       } break;
       case FTKW_INST2A03: {
         // 6 ints (instrument ID, macro ID for each dimension)
@@ -410,8 +536,15 @@ int main(void) {
           fprintf(stderr, "%s:%zu: %s: expected 6 params\n", filename, linenum, kw->name);
           break;
         }
-        fprintf(stderr, "2A03 instrument %02lx with volume %ld, arpeggio %ld, pitch %ld, hi-pitch %ld, timbre %ld\n",
-                params[0], params[1], params[2], params[3], params[4], params[5]);
+        FTPSGInstrument *inst = FTModule_get_instrument(module, params[0]);
+        if (!inst) {
+          fprintf(stderr, "%s:%zu: %s: out of memory for instrument %ld\n", filename, linenum, kw->name, params[0]);
+        }
+        inst->chipid = FTENVPOOL_2A03;
+        inst->envid_volume = params[1];
+        inst->envid_arpeggio = params[2];
+        inst->envid_pitch = params[3];
+        inst->envid_timbre = params[5];
       } break;
       case FTKW_INSTN163: {
         // 9 ints (instrument ID, macro ID for each dimension,
@@ -423,9 +556,22 @@ int main(void) {
           fprintf(stderr, "%s:%zu: %s: expected 9 params\n", filename, linenum, kw->name);
           break;
         }
-        fprintf(stderr, "N163 instrument %02lx with volume %ld, arpeggio %ld, pitch %ld, hi-pitch %ld, timbre %ld, %ld waves of length %ld at address %ld\n",
-                params[0], params[1], params[2], params[3], params[4], params[5],
-                params[8], params[6], params[7]);
+
+        FTPSGInstrument *inst = FTModule_get_instrument(module, params[0]);
+        if (!inst) {
+          fprintf(stderr, "%s:%zu: %s: out of memory for instrument %ld\n", filename, linenum, kw->name, params[0]);
+        }
+        inst->chipid = FTENVPOOL_N163;
+        inst->envid_volume = params[1];
+        inst->envid_arpeggio = params[2];
+        inst->envid_pitch = params[3];
+        inst->envid_timbre = params[5];
+        inst->waveram_length = params[6];
+        inst->waveram_address = params[7];
+        inst->waves = Gap_new(inst->waveram_length, params[8]);
+        if (!inst) {
+          fprintf(stderr, "%s:%zu: %s: out of memory for instrument %ld's waves\n", filename, linenum, kw->name, params[0]);
+        }
       } break;
       case FTKW_N163WAVE: {
         // 2 ints (instrument ID, timbre value)
@@ -449,8 +595,15 @@ int main(void) {
           fprintf(stderr, "%s:%zu: N163 wave has %ld steps (expected 2 to 240)\n", filename, linenum, nvalues);
           break;
         }
-        printf("N163 instrument %ld wave %ld with %ld steps\n",
-               wave_header[0], wave_header[1], nvalues);
+
+        size_t max_nvalues = 0;
+        unsigned char *wave = FTModule_get_wave(module, wave_header[0], wave_header[1], &max_nvalues);
+        if (!wave) {
+          fprintf(stderr, "%s:%zu: %s: out of memory for instrument %ld wave %ld\n", filename, linenum, kw->name, wave_header[0], wave_header[1]);
+        }
+        for (size_t i = 0; i < nvalues && i < max_nvalues; ++i) {
+          wave[i] = wave_data[i];
+        }
       } break;
 
       // These are stateful
@@ -523,7 +676,61 @@ int main(void) {
       } break;
     }
   }
+  // Dump parsed data
+  puts("Done parsing module");
+  puts(module->tvSystem ? "For 2A07 (PAL NES)" : "For 2A03 (NTSC NES)");
+  if (module->tickRate) {
+    printf("Update rate is %u Hz\n", module->tickRate);
+  } else {
+    puts("Update rate is default for machine");
+  }
+  dump_expansion(module->expansion);
+  if (module->expansion & (1 << FTENVPOOL_N163)) {
+    // though all 8 are coded in the ORDER and PATTERNs,
+    // only this many are sent to the WSG
+    printf("First %u of 8 N163 channels are used\n", module->wsgNumChannels);
+  }
 
+  for (size_t i = 0; i < Gap_size(module->all_envelopes); ++i) {
+    FTEnvelope **result = Gap_get(module->all_envelopes, i);
+    if (!result || !*result) {
+      fprintf(stderr, "ouch! all_envelopes[%zu] is null\n", i);
+      continue;
+    }
+    FTEnvelope *env = *result;
+    printf("chip %s %s macro %d with %d steps\n",
+           expansion_names[env->chipid], macro_dim_names[env->parameter],
+           env->envid, env->env_length);
+    hexdump(env->env_data, env->env_length, stdout);
+  }
+
+  for (size_t i = 0; i < Gap_size(module->instruments); ++i) {
+    FTPSGInstrument *inst = Gap_get(module->instruments, i);
+    printf("%s instrument %zu with volume env %d, arpeggio env %d, pitch env %d, timbre %d\n",
+           expansion_names[inst->chipid], i, inst->envid_volume, inst->envid_arpeggio, inst->envid_pitch, inst->envid_timbre);
+    if (inst->waves) {
+      for (size_t w = 0; w < Gap_size(inst->waves); ++w) {
+        hexdump(Gap_get(inst->waves, w), Gap_elSize(inst->waves), stdout);
+      }
+    }
+  }
+
+
+  return module;
+}
+
+int main(void) {
+  const char *filename = "parsertest.txt";
+//  const char *filename = "audio-private/draft.txt";
+
+  FILE *infp = fopen(filename, "r");
+  if (!infp) {
+    perror(filename);
+    return EXIT_FAILURE;
+  }
+  FTModule *module = FTModule_fromtxt(infp, filename);
   fclose(infp);
+  FTModule_delete(module);
+
   return 0;
 }
