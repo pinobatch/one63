@@ -64,7 +64,7 @@ void *Gap_addAll(GapList *v, const void *src, size_t n);
  * @param src a pointer to the element
  * @return a pointer to the copied element, or NULL if not added
  */
-static inline void *Gap_add(GapList *v, const void *src) {
+static inline void *Gap_add(GapList *restrict v, const void *restrict src) {
   return Gap_addAll(v, src, 1);
 }
 
@@ -73,6 +73,13 @@ static inline void *Gap_add(GapList *v, const void *src) {
  * @param v this list
  */
 void Gap_clear(GapList *v);
+
+/**
+ * Returns the size in bytes of an element in this list.
+ * @param v this list
+ * @return the size in bytes
+ */
+size_t Gap_elSize(GapList *v);
 
 /**
  * Returns the number of elements in this list.
@@ -127,12 +134,12 @@ void *Gap_get(GapList *v, size_t i);
  * "from" 2 "to" 6 will replace elements 2, 3, 4, and 5 with the
  * content of a 4-element array.
  * @param v this list
- * @param fromIndex the index of the first element to be set
+ * @param fromIndex the index of the first element to be replaced
  * @param toIndex the index of the first element after those that shall be set
  * (same numbering as Python "slice notation")
  * @param src the array to copy from, which must not overlap fromIndex to toIndex of this list
  */
-void Gap_setRange(GapList *v, size_t fromIndex, size_t toIndex, const void *src);
+void Gap_setRange(GapList *restrict v, size_t fromIndex, size_t toIndex, const void *restrict src);
 
 /**
  * Overwrites a single element.
@@ -140,7 +147,7 @@ void Gap_setRange(GapList *v, size_t fromIndex, size_t toIndex, const void *src)
  * @param i the index of the element to overwrite
  * @param src the element to write
  */
-static inline void Gap_set(GapList *v, size_t i, const void *src) {
+static inline void Gap_set(GapList *restrict v, size_t i, const void *restrict src) {
   Gap_setRange(v, i, i + 1, src);
 }
 
@@ -150,8 +157,8 @@ static inline void Gap_set(GapList *v, size_t i, const void *src) {
  * moves the insertion point outside of the range (whose exact
  * location is unspecified).
  * @param v this list
- * @param fromIndex the index of the first element to be removed
- * @param toIndex the index of the first element after those that shall be removed
+ * @param fromIndex the index of the first element to retrieve
+ * @param toIndex the index of the first element after those that shall be retrieved
  * @return a pointer to element fromIndex
  */
 void *Gap_getRange(GapList *v, size_t fromIndex, size_t toIndex);
@@ -176,7 +183,7 @@ bool Gap_removeAfter(GapList *v, size_t n);
  * Removes a block of elements. For instance, removing elements
  * "from" 2 "to" 6 will remove elements 2, 3, 4, and 5.
  * @param v this list
- * @param fromIndex the index of the first element to be removed
+ * @param fromIndex the index of the first element to remove
  * @param toIndex the index of the first element after those that shall be removed
  * @return true if the specified elements were removed; false if not
  */

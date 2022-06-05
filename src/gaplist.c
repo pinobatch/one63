@@ -31,7 +31,7 @@ void Gap_clear(GapList *v) {
   }
 }
 
-void *Gap_addAll(GapList *v, const void *src, size_t n) {
+void *Gap_addAll(GapList *restrict v, const void *restrict src, size_t n) {
   if (!v) {
     return NULL;
   }
@@ -149,6 +149,10 @@ size_t Gap_size(GapList *v) {
   return v ? v->nEls : 0;
 }
 
+size_t Gap_elSize(GapList *v) {
+  return v ? v->elSize : 0;
+}
+
 bool Gap_removeBefore(GapList *v, size_t n) {
   if (!v) {
     return false;
@@ -195,7 +199,7 @@ bool Gap_removeRange(GapList *v, size_t fromIndex, size_t toIndex) {
   return true;
 }
 
-void Gap_setRange(GapList *v, size_t fromIndex, size_t toIndex, const void *src) {
+void Gap_setRange(GapList *restrict v, size_t fromIndex, size_t toIndex, const void *restrict src) {
   if (!v) {
     return;
   }
