@@ -37,6 +37,8 @@ const char *const syntax_error_msgs[] = {
   "unknown volume (expected 0 through F or .)",
   "NUL in effect", // WITHIN effect; NUL at end of effect is end of row
   "unknown effect parameter (expected 0 through F or .)",
+  "internal error: no channel pitch type",
+  "noise pitch: expected hexadecimal digit",
 };
 
 const unsigned char letter_to_semitone['G' - 'A' + 1] = {
@@ -96,10 +98,73 @@ int parse_macro(const char *s, long *macro_header, long *macro_data) {
   return strtol_multi(s, &str_end, macro_data, 256, 10);
 }
 
+/**
+ * Translates uppercase or lowercase hexadecimal digit characters to
+ * the digit value (0-15) and non-digits to a negative value.
+ */
 int parsexdigit(int ch) {
   if (isdigit(ch)) return ch - '0';
   if (!isxdigit(ch)) return -1;
   return toupper(ch) - 'A' + 10;
+}
+
+#define FTCHPITCH_NORMAL 0
+#define FTCHPITCH_2A03_NOISE 1
+
+/**
+ * Return a 3-character code into a wait, cut, release, or pitch
+ * @param s pointer to the start of the string
+ * @param str_end if not NULL, the end of the converted portion of s
+ * is written here
+ * @param pitch_type the channel's type of pitch (normal, 2A03 noise, etc.)
+ * @return the parsed positive semitone number or FTNOTE_* value,
+ * or a negative error code
+ */
+int parse_pitch(const char *restrict s, char **restrict str_end,
+                unsigned int pitch_type) {
+  if (str_end) *str_end = (char *)s;
+  while (*s && isspace(*s)) ++s;
+  int ch_note = *s++;
+  if (!ch_note) return -7;
+  int ch_accidental = *s++;
+  if (!ch_accidental) return -7;
+  int ch_octave = *s++;
+  if (!ch_octave) return -7;
+  // All channels share wait and rest
+  if (ch_note == '.') {
+    if (str_end) *str_end = (char *)s;
+    return FTNOTE_WAIT;
+  } else if (ch_note == '-') {
+    if (str_end) *str_end = (char *)s;
+    return FTNOTE_CUT;
+  } else if (ch_note == '=') {
+    if (str_end) *str_end = (char *)s;
+    return FTNOTE_RELEASE;
+  }
+  // Handle pitches for each channel pitch type
+  switch (pitch_type) {
+    case FTCHPITCH_NORMAL: {
+      if (ch_note < 'A' || ch_note > 'G') return -4;
+      int semitone = letter_to_semitone[ch_note - 'A'];
+      switch (ch_accidental) {
+        case '-': break;
+        case '#': semitone += 1; break;
+        case 'b': semitone -= 1; break;
+        default: return -5;
+      }
+      if (ch_octave < '0' || ch_octave > '7') return -6;
+      semitone += (ch_octave - '0') * 12;
+      if (str_end) *str_end = (char *)s;
+      return semitone;
+    } break;
+    case FTCHPITCH_2A03_NOISE: {
+      int semitone = parsexdigit(ch_note);
+      if (semitone < 0) return -15;
+      if (str_end) *str_end = (char *)s;
+      return semitone;
+    } break;
+    default: return -14;
+  }
 }
 
 int parse_pattern_effects(const char *restrict s, char **restrict str_end,
@@ -110,10 +175,13 @@ int parse_pattern_effects(const char *restrict s, char **restrict str_end,
   return 0;
 }
 
+#define TRACK_USING_NOISE 3
+
 /**
  * Parse pattern row data
- * @return number of columns read for good macro,
- * or <0 for bad macro
+ * @param out_count maximum number of columns to read
+ * @return number of columns read if all row data good,
+ * or <0 for bad row data
  */
 int parse_pattern_row(const char *restrict s, char **restrict str_end,
                       FTPatRow *restrict outptr, size_t out_count) {
@@ -121,66 +189,30 @@ int parse_pattern_row(const char *restrict s, char **restrict str_end,
 //  fprintf(stderr, "parse_pattern_row %s\nmax %zu columns\n", s, out_count);
 
   while (num_read < out_count && num_read < INT_MAX) {
-    // Eat space, colon, space
+    // Eat space + colon
     while (*s && isspace(*s)) ++s;
     if (!*s) break;
     if (*s++ != ':') return -3;
-    while (*s && isspace(*s)) ++s;
-    // Parse pitch value
-    int note_letter = *s++, semitone = 255;
-    if (note_letter == '.') {
-      semitone = FTNOTE_WAIT;
-      if (!*s++) return -7;
-      if (!*s++) return -7;
-    } else if (note_letter == '-') {
-      semitone = FTNOTE_CUT;
-      if (!*s++) return -7;
-      if (!*s++) return -7;
-    } else if (note_letter == '=') {
-      semitone = FTNOTE_RELEASE;
-      if (!*s++) return -7;
-      if (!*s++) return -7;
-    } else if (note_letter >= 'A' && note_letter <= 'G') {
-      semitone = letter_to_semitone[note_letter - 'A'];
-      int accidental = *s++;
-      switch (accidental) {
-        case '-': break;
-        case '#': semitone += 1; break;
-        case 'b': semitone -= 1; break;
-        default: fprintf(stderr, "unknown accidental '%c'\n", accidental); return -5;
-      }
-      int octave = *s++, octave_amt = 0;
-      if (octave >= '0' && octave <= '7') {
-        semitone += (octave - '0') * 12;
-      } else {
-        fprintf(stderr, "unknown octave '%c'\n", octave); return -6;
-      }
-      printf("note %c%c%c, semitone %d\n",
-             note_letter, accidental, octave, semitone);
-    } else {
-      printf("unknown note letter: '%c'\n", note_letter);
-      return -4;
-    }
+    char *semitone_end = 0;
+    int pitch_type = (num_read == TRACK_USING_NOISE)
+                     ? FTCHPITCH_2A03_NOISE : FTCHPITCH_NORMAL;
+    int semitone = parse_pitch(s, &semitone_end, pitch_type);
+    if (semitone < 0) return semitone;
+    s = semitone_end;
     // Parse instrument
     while (*s && isspace(*s)) ++s;
-    int insthi = *s++, instrument;
-    if (!insthi) return -8;
-    int instlo = *s++;
-    if (!instlo) return -8;
-    if (insthi == '&') {
+    int ch_insthi = *s++, instrument;
+    if (!ch_insthi) return -8;
+    int ch_instlo = *s++;
+    if (!ch_instlo) return -8;
+    if (ch_insthi == '&') {
       instrument = FTINST_LEGATO;
-    } else if (insthi == '.') {
+    } else if (ch_insthi == '.') {
       instrument = FTINST_NONE;
     } else {
-      insthi = parsexdigit(insthi);
-      instlo = parsexdigit(instlo);
-      if (insthi >= 0 && instlo >= 0) {
-        instrument = insthi * 16 + instlo;
-      } else {
-        fprintf(stderr, "unknown instrument %c%c\n", insthi, instlo);
-        return -9;
-      }
-      printf("instrument %02X\n", instrument);
+      int d_insthi = parsexdigit(ch_insthi), d_instlo = parsexdigit(ch_instlo);
+      if (d_insthi < 0 || d_instlo < 0) return -9;
+      instrument = d_insthi * 16 + d_instlo;
     }
     // Parse volume
     while (*s && isspace(*s)) ++s;
@@ -188,24 +220,60 @@ int parse_pattern_row(const char *restrict s, char **restrict str_end,
     if (!volumedigit) return -10;
     if (volumedigit != '.') {
       volume = parsexdigit(volumedigit);
-      if (volume < 0) {
-        fprintf(stderr, "unknown volume %c\n", volumedigit);
-        return -11;
-      }
-      printf("volume %X\n", volume);
-    } else {
-      printf("no volume\n");
+      if (volume < 0) return -11;
     }
-    // TODO: Parse effects for real
-    while (*s && *s != ':') ++s;
-    
+    outptr[num_read].note = semitone;
+    outptr[num_read].instrument = instrument;
+    outptr[num_read].volume = volume;
+    // Parse effects
+    size_t effects_read = 0;
+    while (effects_read < FTPAT_MAX_EFFECTS) {
+      while (*s && isspace(*s)) ++s;
+      if (!*s || *s == ':') break;
+
+      // TODO: Flesh this out
+      int ch_fx_type = *s++;
+      int ch_fx_hi = *s++;
+      if (!ch_fx_hi) return -12;
+      int ch_fx_lo = *s++;
+      if (!ch_fx_lo) return -12;
+      if (ch_fx_type == '.') continue;  // No effect
+      int fx_hi = parsexdigit(ch_fx_hi), fx_lo = parsexdigit(ch_fx_lo);
+      if (fx_hi >= 0 && fx_lo >= 0) {
+        outptr[num_read].effects[effects_read].fx = ch_fx_type;
+        outptr[num_read].effects[effects_read].value = fx_hi * 16 + fx_lo;
+        ++effects_read;
+      }
+    }
+    for (; effects_read < FTPAT_MAX_EFFECTS; ++effects_read) {
+      outptr[num_read].effects[effects_read].fx = 0;
+      outptr[num_read].effects[effects_read].value = 0;
+    }
+    // Count the column
     if (str_end) *str_end = (char *)s;
+    num_read += 1;
   }
   return num_read;
 }
 
+void dump_pattern_row(const FTPatRow *row, size_t count) {
+  for (size_t i = 0; i < count; ++i) {
+    printf(" : %02x%02x%02x", row[i].note, row[i].instrument, row[i].volume);
+    for (size_t j = 0; j < FTPAT_MAX_EFFECTS; ++j) {
+      unsigned int f = row[i].effects[j].fx;
+      if (f) {
+        printf(" %c%02x", f, row[i].effects[j].value);
+      } else {
+        fputs(" ...", stdout);
+      }
+    }
+  }
+  putchar('\n');
+}
+
 int main(void) {
   const char *filename = "parsertest.txt";
+//  const char *filename = "audio-private/draft.txt";
   char linebuf[FT_MAX_LINE_LEN];
   size_t linenum = 0;
   
@@ -373,9 +441,10 @@ int main(void) {
           fprintf(stderr, "%s:%zu: %s: expected 2 params\n", filename, linenum, kw->name);
           break;
         }
+        linepos = str_end;
         while (*linepos && isspace(*linepos)) ++linepos;  // eat colon
         if (*linepos++ != ':') {
-          fprintf(stderr, "%s:%zu: missing colon after params\n", filename, linenum);
+          fprintf(stderr, "%s:%zu: missing colon after M163 params\n", filename, linenum);
           break;
         }
         nvalues = strtol_multi(linepos, &str_end, wave_data, 240, 10);
@@ -450,11 +519,10 @@ int main(void) {
         linepos = str_end;
         
         FTPatRow row[FT_MAX_CHANNELS];
-        size_t nvalues = parse_pattern_row(linepos, &str_end,
-                                           row, sizeof row/sizeof row[0]);
-        (void)nvalues;
-
-        fprintf(stderr, "%s:%zu: pattern row %02lx not yet handled\n", filename, linenum, first_value);
+        int nvalues = parse_pattern_row(linepos, &str_end,
+                                        row, sizeof row/sizeof row[0]);
+        printf("pattern row %02lx has %d columns\n", first_value, nvalues);
+        dump_pattern_row(row, nvalues);
       } break;
     }
   }

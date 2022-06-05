@@ -1,7 +1,7 @@
 #ifndef FTMODULE_H
 #define FTMODULE_H
 
-#define MAX_EFFECTS 4
+#define FTPAT_MAX_EFFECTS 4
 
 typedef struct {
   // fx is an ascii character or NUL for none assigned
@@ -22,7 +22,7 @@ typedef struct {
   // Volume 0-15: 0-F; 255: unchanged
   // each may be set to UCHAR_MAX for none assigned
   unsigned char note, instrument, volume, padding0;
-  FTPatEffect effects[MAX_EFFECTS];
+  FTPatEffect effects[FTPAT_MAX_EFFECTS];
 } FTPatRow;
 
 #endif

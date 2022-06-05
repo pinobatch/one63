@@ -21,6 +21,9 @@ Thu 05-26
 Mon 05-30
 1 h Parse pattern note, instrument, and volume
 
+Sun 06-05
+1.75 h Parse effects; parse note, instrument, and volume all the way through a nontrivial piece
+
 N.B.: remove time spent on "tentative" items if they don't end up in a deliverable
 
 immediate next steps
