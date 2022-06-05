@@ -23,13 +23,13 @@ Mon 05-30
 
 Sun 06-05
 1.75 h Parse effects; parse note, instrument, and volume all the way through a nontrivial piece
+.25 h Ensure proposed structs compile
 
 N.B.: remove time spent on "tentative" items if they don't end up in a deliverable
 
 immediate next steps
 --------------------
-Parse sequence effect data
-Ensure the whole row is parsed
-Stuff instrument data into a struct
 Stuff track data into a struct
+Generate metronome data from track data
+Stuff instrument data into a struct
 Make hash table to look up instruments and macros

@@ -5,11 +5,8 @@
 #include "ftkeywords.h"
 #include "ftmodule.h"
 
-#define FT_MIN_CHANNELS 5
-#define FT_MAX_CHANNELS 28
 #define FT_MAX_CHARS_PER_CHANNEL 27
 #define FT_MAX_LINE_LEN (16 + FT_MAX_CHANNELS * FT_MAX_CHARS_PER_CHANNEL)
-#define FT_MAX_OCTAVE 7
 
 const char WHITESPACE_CHARACTERS[] = " \t\n\v\f\r";
 
@@ -152,7 +149,7 @@ int parse_pitch(const char *restrict s, char **restrict str_end,
         case 'b': semitone -= 1; break;
         default: return -5;
       }
-      if (ch_octave < '0' || ch_octave > '7') return -6;
+      if (ch_octave < '0' || ch_octave > '0' + FTNOTE_MAX_OCTAVE) return -6;
       semitone += (ch_octave - '0') * 12;
       if (str_end) *str_end = (char *)s;
       return semitone;
@@ -417,8 +414,8 @@ int main(void) {
                 params[0], params[1], params[2], params[3], params[4], params[5]);
       } break;
       case FTKW_INSTN163: {
-        // 9 ints (instrument ID, macro ID for each dimension, wave length, unk 0, unk 1)
-        // then name
+        // 9 ints (instrument ID, macro ID for each dimension,
+        // wave length, wave RAM start address, wave count) then name
         long params[9];
         char *str_end;
         size_t nvalues = strtol_multi(linepos, &str_end, params, 9, 10);
