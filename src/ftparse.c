@@ -12,19 +12,9 @@ by Damian Yerrick
 #define FT_MAX_CHARS_PER_CHANNEL 27
 #define FT_MAX_LINE_LEN (16 + FT_MAX_CHANNELS * FT_MAX_CHARS_PER_CHANNEL)
 
-#define EXPECTED_INSTS 16
-#define EXPECTED_ENVS_PER_INST 2
-#define EXPECTED_SONGS 16
-#define EXPECTED_ORDER 16
-#define EXPECTED_PATTERNS 16
-
 const char WHITESPACE_CHARACTERS[] = " \t\n\v\f\r";
 
-const char *const FT_parameter_names[] = {
-  "volume", "arpeggio", "pitch", "hi-pitch", "timbre"
-};
-
-const char *const syntax_error_msgs[] = {
+const char *const FT_parse_error_msgs[] = {
   "unknown error",
   "not enough header values (expected 5)",
   "macro dimension out of range (expected 0 through 4)",
@@ -257,105 +247,6 @@ int parse_pattern_row(const char *restrict s, char **restrict str_end,
   return num_read;
 }
 
-void FTSong_unlink(FTSong *song) {
-  if (!song) return;
-  free(song->title);
-  Gap_delete(song->order);  // a list of fixed-length rows
-  while (!Gap_isEmpty(song->patterns)) {
-    GapList **result = Gap_get(song->patterns, 0);
-    GapList *trackPatterns = *result;
-    Gap_delete(trackPatterns);
-    Gap_remove(song->patterns, 0);
-  }
-  Gap_delete(song->patterns);
-  song->title = 0;
-  song->order = 0;
-  song->patterns = 0;
-}
-
-int FTSong_init(FTSong *song, size_t nchannels, size_t rows_per_pattern) {
-  if (rows_per_pattern > FTPAT_MAX_ROWS) return -1;
-  song->title = NULL;
-  song->order = Gap_new(nchannels, EXPECTED_ORDER);
-  song->patterns = Gap_new(sizeof(GapList *), nchannels);
-  song->rows_per_pattern = rows_per_pattern;
-  song->start_speed = 6;
-  song->start_tempo = 150;
-  if (!song->order || !song->patterns) goto on_bad_alloc;
-  for (size_t i = 0; i < nchannels; ++i) {
-    GapList *trackPatterns = Gap_new(rows_per_pattern * sizeof(FTPatRow), EXPECTED_PATTERNS);
-    if (!trackPatterns) goto on_bad_alloc;
-    if (!Gap_add(song->patterns, &trackPatterns)) goto on_bad_alloc;
-  }
-  return 0;
-
-on_bad_alloc:
-  FTSong_unlink(song);
-  return -1;
-}
-
-void FTModule_delete(FTModule *module) {
-  if (!module) return;
-  free(module->title);
-  free(module->author);
-  free(module->copyright);
-  // Delete instruments
-  if (module->instruments) {
-    while (!Gap_isEmpty(module->instruments)) {
-      FTPSGInstrument *ws = Gap_get(module->instruments, 0);
-      Gap_delete(ws->waves);
-      Gap_remove(module->instruments, 0);
-    }
-    Gap_delete(module->instruments);
-  }
-  // Delete envelopes
-  if (module->all_envelopes) {
-    while (!Gap_isEmpty(module->all_envelopes)) {
-      FTEnvelope **ws = Gap_get(module->all_envelopes, 0);
-      free(*ws);
-      Gap_remove(module->all_envelopes, 0);
-    }
-    Gap_delete(module->all_envelopes);
-  }
-  // Delete songs
-  if (module->songs) {
-    while (!Gap_isEmpty(module->songs)) {
-      FTSong *song = Gap_get(module->songs, 0);
-      FTSong_unlink(song);
-      Gap_remove(module->songs, 0);
-    }
-    Gap_delete(module->songs);
-  }
-  free(module);
-}
-
-FTModule *FTModule_new(void) {
-  FTModule *module = calloc(1, sizeof(FTModule));
-  if (!module) return 0;
-  // Clear pointers manually (in case (void *)0 isn't bitwise 0)
-  module->title = 0;
-  module->author = 0;
-  module->copyright = 0;
-  // Allocate dynamic arrays
-  module->instruments = Gap_new(sizeof(FTPSGInstrument), EXPECTED_INSTS);
-  module->all_envelopes
-    = Gap_new(sizeof(FTEnvelope *), EXPECTED_INSTS * EXPECTED_ENVS_PER_INST);
-  module->songs = Gap_new(sizeof(FTSong), EXPECTED_SONGS);
-  if (!module->songs || !module->instruments || !module->all_envelopes) {
-    FTModule_delete(module);
-    return 0;
-  }
-  return module;
-}
-
-size_t FTModule_count_channels(unsigned int expansion) {
-  size_t count = FT_2A03_NUM_CHANNELS;
-  for (size_t i = 0; i < FT_NUM_ENVPOOLS; ++i) {
-    if (expansion & (1 << i)) count += FT_expansion_channels[i];
-  }
-  return count;
-}
-
 /**
  * Allocates an envelope (or sequence or macro) as a struct with a
  * flexible member.  Caller must free.  Takes longs to interoperate
@@ -379,68 +270,6 @@ FTEnvelope *FTModule_pack_env(const long *restrict header,
   env->env_length = env_length;
   for (size_t i = 0; i < env_length; ++i) env->env_data[i] = env_data[i];
   return env;
-}
-
-/**
- * Inserts blank instruments until at least inst+1 instruments
- * are present then returns Gap_get(instruments, instid).
- */
-FTPSGInstrument *FTModule_get_instrument(FTModule *module, size_t instid) {
-  if (!module || !module->instruments) return 0;
-  static const FTPSGInstrument null_instrument =
-    {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0};
-  while (Gap_size(module->instruments) <= instid) {
-    if (!Gap_add(module->instruments, &null_instrument)) return 0;
-  }
-  return Gap_get(module->instruments, instid);
-}
-
-/**
- * Inserts blank waves into instrument instid until at least waveid+1
- * waves are present then returns Gap_get(waves, waveid).
- * @param elSize if not null, the size of each wave is written here
- */
-unsigned char *FTModule_get_wave(FTModule *module, size_t instid,
-                                 size_t waveid, size_t *elSize) {
-  FTPSGInstrument *inst = FTModule_get_instrument(module, instid);
-  if (!inst || !inst->waves) return 0;
-  static const char null_wave[FTN163_MAX_WAVE];
-  while (Gap_size(inst->waves) <= waveid) {
-    if (!Gap_add(inst->waves, null_wave)) return 0;
-  }
-  if (elSize) *elSize = Gap_elSize(inst->waves);
-  return Gap_get(inst->waves, waveid);
-}
-
-/**
- * Inserts blank patterns into a track of a song until at least
- * pattern+1 patterns are present then returns the address of a row
- * in the pattern.
- * @param elSize if not null, the size of each wave is written here
- */
-FTPatRow *FTSong_get_row(FTSong *song, size_t track,
-                         size_t pattern, size_t row) {
-  if (!song || !song->patterns || row >= song->rows_per_pattern) return 0;
-  GapList **result = Gap_get(song->patterns, track);
-  if (!result) return 0;
-  GapList *track_patterns = *result;
-  if (Gap_size(track_patterns) <= pattern) {
-    FTPatRow blankPattern[FTPAT_MAX_ROWS];
-    for (size_t i = 0; i < song->rows_per_pattern; ++i) {
-      blankPattern[i].note = FTNOTE_WAIT;
-      blankPattern[i].instrument = FTINST_NONE;
-      blankPattern[i].volume = FTVOLCOL_NONE;
-      for (size_t j = 0; j < FTPAT_MAX_EFFECTS; ++j) {
-        blankPattern[i].effects[j].fx = 0;
-        blankPattern[i].effects[j].value = 0;
-      }
-    }
-    do {
-      Gap_add(track_patterns, blankPattern);
-    } while (Gap_size(track_patterns) <= pattern);
-  }
-  FTPatRow *pattern_base = Gap_get(track_patterns, pattern);
-  return pattern_base + row;
 }
 
 /**
@@ -550,7 +379,7 @@ FTModule *FTModule_fromtxt(FILE *restrict infp, const char *restrict filename) {
         if (nvalues < 0) {
           size_t msgid = nvalues >= -3 ? -nvalues : 0;
           fprintf(stderr, "%s:%zu: %s: %s\n",
-                  filename, linenum, kw->name, syntax_error_msgs[msgid]);
+                  filename, linenum, kw->name, FT_parse_error_msgs[msgid]);
           break;
         }
         FTEnvelope *macro = FTModule_pack_env(macro_header, macro_data, nvalues);
@@ -566,7 +395,7 @@ FTModule *FTModule_fromtxt(FILE *restrict infp, const char *restrict filename) {
         if (nvalues < 0) {
           size_t msgid = nvalues >= -3 ? -nvalues : 0;
           fprintf(stderr, "%s:%zu: %s: %s\n",
-                  filename, linenum, kw->name, syntax_error_msgs[msgid]);
+                  filename, linenum, kw->name, FT_parse_error_msgs[msgid]);
           break;
         }
         FTEnvelope *macro = FTModule_pack_env(macro_header, macro_data, nvalues);
@@ -772,130 +601,4 @@ FTModule *FTModule_fromtxt(FILE *restrict infp, const char *restrict filename) {
     }
   }
   return module;
-}
-
-// Dumping //////////////////////////////////////////////////////////
-
-void dump_pattern_row(const FTPatRow *row, size_t count) {
-  for (size_t i = 0; i < count; ++i) {
-    printf(" : %02x%02x%02x", row[i].note, row[i].instrument, row[i].volume);
-    for (size_t j = 0; j < FTPAT_MAX_EFFECTS; ++j) {
-      unsigned int f = row[i].effects[j].fx;
-      if (f) {
-        printf(" %c%02x", f, row[i].effects[j].value);
-      } else {
-        fputs(" ...", stdout);
-      }
-    }
-  }
-  putchar('\n');
-}
-
-void dump_expansion(unsigned int expansion) {
-  if (!expansion) puts("2A03-only module");
-  for (size_t i = 0; i < 6; ++i) {
-    if (expansion & (1 << i)) printf("Uses %s\n", FT_expansion_names[i]);
-  }
-}
-
-void hexdump(const void *restrict start, size_t length, FILE *restrict fp) {
-  size_t chars_this_line = 0;
-  const unsigned char *s = start;
-  for (size_t i = 0; i < length; ++i) {
-    fprintf(fp, "%02x ", *s++);
-    if (++chars_this_line >= 16) {
-      fputc('\n', fp);
-      chars_this_line = 0;
-    }
-  }
-  if (chars_this_line) fputc('\n', fp);
-}
-
-void FTModule_dump(FTModule *module) {
-  puts(module->tvSystem ? "For 2A07 (PAL NES)" : "For 2A03 (NTSC NES)");
-  if (module->tickRate) {
-    printf("Update rate is %u Hz\n", module->tickRate);
-  } else {
-    puts("Update rate is default for machine");
-  }
-  dump_expansion(module->expansion);
-  if (module->expansion & (1 << FTENVPOOL_N163)) {
-    // though all 8 are coded in the ORDER and PATTERNs,
-    // only this many are sent to the WSG
-    printf("First %u of 8 N163 channels are used\n", module->wsgNumChannels);
-  }
-
-  for (size_t i = 0; i < Gap_size(module->all_envelopes); ++i) {
-    FTEnvelope **result = Gap_get(module->all_envelopes, i);
-    if (!result || !*result) {
-      fprintf(stderr, "ouch! all_envelopes[%zu] is null\n", i);
-      continue;
-    }
-    FTEnvelope *env = *result;
-    printf("chip %s %s macro %d with %d steps\n",
-           FT_expansion_names[env->chipid], FT_parameter_names[env->parameter],
-           env->envid, env->env_length);
-    hexdump(env->env_data, env->env_length, stdout);
-  }
-
-  for (size_t i = 0; i < Gap_size(module->instruments); ++i) {
-    FTPSGInstrument *inst = Gap_get(module->instruments, i);
-    printf("%s instrument %zu with volume env %d, arpeggio env %d, pitch env %d, timbre %d\n",
-           FT_expansion_names[inst->chipid], i, inst->envid_volume, inst->envid_arpeggio, inst->envid_pitch, inst->envid_timbre);
-    if (inst->waves) {
-      for (size_t w = 0; w < Gap_size(inst->waves); ++w) {
-        hexdump(Gap_get(inst->waves, w), Gap_elSize(inst->waves), stdout);
-      }
-    }
-  }
-
-  for (size_t i = 0; i < Gap_size(module->songs); ++i) {
-    FTSong *s = Gap_get(module->songs, i);
-
-    printf("song %zu: %u rows per pattern, speed %u, tempo %u, %zu order rows\n",
-           i + 1U, s->rows_per_pattern, s->start_speed, s->start_tempo,
-           Gap_size(s->order));
-    for (size_t r = 0; r < Gap_size(s->order); ++r) {
-      const unsigned char *order_row = Gap_get(s->order, r);
-      printf("order row $%02zu: ", r);
-      hexdump(order_row, Gap_elSize(s->order), stdout);
-    }
-    for (size_t t = 0; t < Gap_size(s->patterns); ++t) {
-      GapList *track_patterns = *(GapList **)Gap_get(s->patterns, t);
-      printf("song %zu track %zu has %zu patterns\n",
-             i + 1U, t + 1U, Gap_size(track_patterns));
-      for (size_t p = 0; p < Gap_size(track_patterns); ++p) {
-        FTPatRow *rows = FTSong_get_row(s, t, p, 0);
-        for (size_t r = 0; r < s->rows_per_pattern; ++r) {
-          printf("%02zX:%02zX", p, r);
-          dump_pattern_row(&rows[r], 1);
-        }
-      }
-    }
-  }
-}
-
-// Driver program ///////////////////////////////////////////////////
-
-int main(void) {
-  const char *filename = "parsertest.txt";
-//  const char *filename = "audio-private/draft.txt";
-
-  FILE *infp = fopen(filename, "r");
-  if (!infp) {
-    perror(filename);
-    return EXIT_FAILURE;
-  }
-  FTModule *module = FTModule_fromtxt(infp, filename);
-  fclose(infp);
-  if (!module) {
-    fprintf(stderr, "%s: error loading\n", filename);
-    return EXIT_FAILURE;
-  }
-  // Dump parsed data
-  puts("Done parsing module");
-  FTModule_dump(module);
-  FTModule_delete(module);
-
-  return 0;
 }

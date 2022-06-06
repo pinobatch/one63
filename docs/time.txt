@@ -27,6 +27,7 @@ Sun 06-05
 
 Mon 06-06
 .75 h Stuff pattern rows into a struct
+.25 h Move FTModule accessors to their own file
 
 N.B.: remove time spent on "tentative" items if they don't end up in a deliverable
 

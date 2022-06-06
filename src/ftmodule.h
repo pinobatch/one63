@@ -105,4 +105,56 @@ typedef struct {
   // TODO: come up with a solution for envelope lookup
 } FTModule;
 
+
+
+/**
+ * Initializes a song's properties to default values and allocates
+ * arrays for the order and patterns.
+ */
+int FTSong_init(FTSong *song, size_t nchannels, size_t rows_per_pattern);
+
+/**
+ * Releases the arrays held by a song
+ */
+void FTSong_unlink(FTSong *song);
+
+/**
+ * Releases arrays held by a module and frees the module.
+ */
+void FTModule_delete(FTModule *module);
+
+/**
+ * Allocates a module, initializes its properties to default values,
+ * and allocates arrays for the instruments, envelopes, and songs.
+ */
+FTModule *FTModule_new(void);
+
+/**
+ * Counts channels corresponding to a set of enabled expansions.
+ */
+size_t FTModule_count_channels(unsigned int expansion);
+
+/**
+ * Inserts blank instruments until at least inst+1 instruments
+ * are present then returns Gap_get(instruments, instid).
+ */
+FTPSGInstrument *FTModule_get_instrument(FTModule *module, size_t instid);
+
+/**
+ * Inserts blank waves into instrument instid until at least waveid+1
+ * waves are present then returns Gap_get(waves, waveid).
+ * @param elSize if not null, the size of each wave is written here
+ */
+unsigned char *FTModule_get_wave(FTModule *module, size_t instid,
+                                 size_t waveid, size_t *elSize);
+
+/**
+ * Inserts blank patterns into a track of a song until at least
+ * pattern+1 patterns are present then returns the address of a row
+ * in the pattern.
+ * @param elSize if not null, the size of each wave is written here
+ */
+FTPatRow *FTSong_get_row(FTSong *song, size_t track,
+                         size_t pattern, size_t row);
+
 #endif
