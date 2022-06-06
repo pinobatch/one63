@@ -18,6 +18,9 @@ enum FTEnvPoolID {
   FTENVPOOL_2A03 = FTENVPOOL_MMC5
 };
 
+extern const char *const FT_expansion_names[FT_NUM_ENVPOOLS];
+extern const unsigned char FT_expansion_channels[FT_NUM_ENVPOOLS];
+
 typedef struct {
   unsigned char chipid;  // chipid and envid match those in FTEnvelope
   // each may be set to UCHAR_MAX meaning none assigned
@@ -44,11 +47,14 @@ typedef struct {
 
 // Patterns /////////////////////////////////////////////////////////
 
+#define FTSONG_MAX_PATTERNS 256
 #define FTPAT_MAX_ROWS 256
 #define FTPAT_MAX_EFFECTS 4
-#define FT_MIN_CHANNELS 5
+#define FT_2A03_NUM_CHANNELS 5
+#define FT_MIN_CHANNELS FT_2A03_NUM_CHANNELS
 #define FT_MAX_CHANNELS 28
 #define FTNOTE_MAX_OCTAVE 7
+#define FT_NOISE_CHANNEL 3
 
 typedef struct {
   // fx is an ascii character or NUL for none assigned

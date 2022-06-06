@@ -17,7 +17,7 @@ run_mixer()
 run_parser()
 {
   gperf --output-file=build/ftkeywords.c src/ftkeywords.gperf
-  gcc $CWARN -Os -fsanitize=address -o ftparse src/ftparse.c src/gaplist.c build/ftkeywords.c
+  gcc $CWARN -Os -fsanitize=address -o ftparse src/ftparse.c src/ftmodule.c src/gaplist.c build/ftkeywords.c
   ./ftparse
 }
 

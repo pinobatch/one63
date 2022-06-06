@@ -20,16 +20,7 @@ by Damian Yerrick
 
 const char WHITESPACE_CHARACTERS[] = " \t\n\v\f\r";
 
-const char *const expansion_names[] = {
-  "VRC6", "VRC7", "FDS", "MMC5", "N163", "YM2149"
-};
-
-#define FT_2A03_NUM_CHANNELS 5
-const unsigned char channels_per_expansion[] = {
-  3, 6, 1, 2, 8, 3
-};
-
-const char *const macro_dim_names[] = {
+const char *const FT_parameter_names[] = {
   "volume", "arpeggio", "pitch", "hi-pitch", "timbre"
 };
 
@@ -56,7 +47,6 @@ const char *const syntax_error_msgs[] = {
 const unsigned char letter_to_semitone['G' - 'A' + 1] = {
   9, 11, 0, 2, 4, 5, 7
 };
-
 
 /**
  * Calls strtol() up to out_count times.
@@ -188,8 +178,6 @@ int parse_pattern_effects(const char *restrict s, char **restrict str_end,
   return 0;
 }
 
-#define TRACK_USING_NOISE 3
-
 /**
  * Parse pattern row data
  * @param out_count maximum number of columns to read
@@ -207,7 +195,7 @@ int parse_pattern_row(const char *restrict s, char **restrict str_end,
     if (!*s) break;
     if (*s++ != ':') return -3;
     char *semitone_end = 0;
-    int pitch_type = (num_read == TRACK_USING_NOISE)
+    int pitch_type = (num_read == FT_NOISE_CHANNEL)
                      ? FTCHPITCH_2A03_NOISE : FTCHPITCH_NORMAL;
     int semitone = parse_pitch(s, &semitone_end, pitch_type);
     if (semitone < 0) return semitone;
@@ -267,41 +255,6 @@ int parse_pattern_row(const char *restrict s, char **restrict str_end,
     num_read += 1;
   }
   return num_read;
-}
-
-void dump_pattern_row(const FTPatRow *row, size_t count) {
-  for (size_t i = 0; i < count; ++i) {
-    printf(" : %02x%02x%02x", row[i].note, row[i].instrument, row[i].volume);
-    for (size_t j = 0; j < FTPAT_MAX_EFFECTS; ++j) {
-      unsigned int f = row[i].effects[j].fx;
-      if (f) {
-        printf(" %c%02x", f, row[i].effects[j].value);
-      } else {
-        fputs(" ...", stdout);
-      }
-    }
-  }
-  putchar('\n');
-}
-
-void dump_expansion(unsigned int expansion) {
-  if (!expansion) puts("2A03-only module");
-  for (size_t i = 0; i < 6; ++i) {
-    if (expansion & (1 << i)) printf("Uses %s\n", expansion_names[i]);
-  }
-}
-
-void hexdump(const void *restrict start, size_t length, FILE *restrict fp) {
-  size_t chars_this_line = 0;
-  const unsigned char *s = start;
-  for (size_t i = 0; i < length; ++i) {
-    fprintf(fp, "%02x ", *s++);
-    if (++chars_this_line >= 16) {
-      fputc('\n', fp);
-      chars_this_line = 0;
-    }
-  }
-  if (chars_this_line) fputc('\n', fp);
 }
 
 void FTSong_unlink(FTSong *song) {
@@ -398,7 +351,7 @@ FTModule *FTModule_new(void) {
 size_t FTModule_count_channels(unsigned int expansion) {
   size_t count = FT_2A03_NUM_CHANNELS;
   for (size_t i = 0; i < FT_NUM_ENVPOOLS; ++i) {
-    if (expansion & (1 << i)) count += channels_per_expansion[i];
+    if (expansion & (1 << i)) count += FT_expansion_channels[i];
   }
   return count;
 }
@@ -460,6 +413,37 @@ unsigned char *FTModule_get_wave(FTModule *module, size_t instid,
 }
 
 /**
+ * Inserts blank patterns into a track of a song until at least
+ * pattern+1 patterns are present then returns the address of a row
+ * in the pattern.
+ * @param elSize if not null, the size of each wave is written here
+ */
+FTPatRow *FTSong_get_row(FTSong *song, size_t track,
+                         size_t pattern, size_t row) {
+  if (!song || !song->patterns || row >= song->rows_per_pattern) return 0;
+  GapList **result = Gap_get(song->patterns, track);
+  if (!result) return 0;
+  GapList *track_patterns = *result;
+  if (Gap_size(track_patterns) <= pattern) {
+    FTPatRow blankPattern[FTPAT_MAX_ROWS];
+    for (size_t i = 0; i < song->rows_per_pattern; ++i) {
+      blankPattern[i].note = FTNOTE_WAIT;
+      blankPattern[i].instrument = FTINST_NONE;
+      blankPattern[i].volume = FTVOLCOL_NONE;
+      for (size_t j = 0; j < FTPAT_MAX_EFFECTS; ++j) {
+        blankPattern[i].effects[j].fx = 0;
+        blankPattern[i].effects[j].value = 0;
+      }
+    }
+    do {
+      Gap_add(track_patterns, blankPattern);
+    } while (Gap_size(track_patterns) <= pattern);
+  }
+  FTPatRow *pattern_base = Gap_get(track_patterns, pattern);
+  return pattern_base + row;
+}
+
+/**
  * @param infp a text file
  * @param filename a filename to display in error messages
  */
@@ -471,6 +455,7 @@ FTModule *FTModule_fromtxt(FILE *restrict infp, const char *restrict filename) {
 
   size_t linenum = 0;
   FTSong *cur_song = 0;
+  size_t cur_pattern = 0;
   
   while (fgets(linebuf, sizeof linebuf, infp)) {
     linenum += 1;
@@ -732,7 +717,12 @@ FTModule *FTModule_fromtxt(FILE *restrict infp, const char *restrict filename) {
                   filename, linenum);
           break;
         }
-        printf("Writing rows to last track's pattern 0x%02lx\n", first_value);
+        if (first_value < 0 || first_value >= FTSONG_MAX_PATTERNS) {
+          fprintf(stderr, "%s:%zu: pattern %02lX out of range\n",
+                  filename, linenum, first_value);
+          break;
+        }
+        cur_pattern = first_value;
       } break;
       case FTKW_ROW: {
         // hex row ID, then colon, then colon-separated row contents
@@ -742,18 +732,86 @@ FTModule *FTModule_fromtxt(FILE *restrict infp, const char *restrict filename) {
           fprintf(stderr, "%s:%zu: no pattern ID\n", filename, linenum);
           break;
         }
+        if (!cur_song) {
+          fprintf(stderr, "%s:%zu: no song active\n", filename, linenum);
+          break;
+        }
         linepos = str_end;
-        
+        if (first_value < 0 || first_value >= cur_song->rows_per_pattern) {
+          fprintf(stderr, "%s:%zu: row %02lX out of range\n",
+                  filename, linenum, first_value);
+          break;
+        }
+
         FTPatRow row[FT_MAX_CHANNELS];
         int nvalues = parse_pattern_row(linepos, &str_end,
                                         row, sizeof row/sizeof row[0]);
-        printf("pattern row %02lx has %d columns\n", first_value, nvalues);
-        dump_pattern_row(row, nvalues);
+        if (nvalues < 0) {
+          fprintf(stderr, "%s:%zu: row %02lX: pattern parse error\n",
+                  filename, linenum, first_value);
+          break;
+        }
+
+        for (size_t i = 0;
+             i < (unsigned)nvalues && i < Gap_size(cur_song->patterns);
+             ++i) {
+          if (row[i].note == FTNOTE_WAIT && row[i].instrument == FTINST_NONE
+              && row[i].volume == FTVOLCOL_NONE && row[i].effects[0].fx == 0) {
+            continue;  // skip completely empty rows
+          }
+
+          FTPatRow *dst = FTSong_get_row(cur_song, i, cur_pattern, first_value);
+          if (!dst) {
+            fprintf(stderr, "%s:%zu: track %zu pattern %02zX row %02lX is null\n",
+                    filename, linenum, i + 1U, cur_pattern, first_value);
+            break;
+          }
+          *dst = row[i];
+        }
       } break;
     }
   }
-  // Dump parsed data
-  puts("Done parsing module");
+  return module;
+}
+
+// Dumping //////////////////////////////////////////////////////////
+
+void dump_pattern_row(const FTPatRow *row, size_t count) {
+  for (size_t i = 0; i < count; ++i) {
+    printf(" : %02x%02x%02x", row[i].note, row[i].instrument, row[i].volume);
+    for (size_t j = 0; j < FTPAT_MAX_EFFECTS; ++j) {
+      unsigned int f = row[i].effects[j].fx;
+      if (f) {
+        printf(" %c%02x", f, row[i].effects[j].value);
+      } else {
+        fputs(" ...", stdout);
+      }
+    }
+  }
+  putchar('\n');
+}
+
+void dump_expansion(unsigned int expansion) {
+  if (!expansion) puts("2A03-only module");
+  for (size_t i = 0; i < 6; ++i) {
+    if (expansion & (1 << i)) printf("Uses %s\n", FT_expansion_names[i]);
+  }
+}
+
+void hexdump(const void *restrict start, size_t length, FILE *restrict fp) {
+  size_t chars_this_line = 0;
+  const unsigned char *s = start;
+  for (size_t i = 0; i < length; ++i) {
+    fprintf(fp, "%02x ", *s++);
+    if (++chars_this_line >= 16) {
+      fputc('\n', fp);
+      chars_this_line = 0;
+    }
+  }
+  if (chars_this_line) fputc('\n', fp);
+}
+
+void FTModule_dump(FTModule *module) {
   puts(module->tvSystem ? "For 2A07 (PAL NES)" : "For 2A03 (NTSC NES)");
   if (module->tickRate) {
     printf("Update rate is %u Hz\n", module->tickRate);
@@ -775,7 +833,7 @@ FTModule *FTModule_fromtxt(FILE *restrict infp, const char *restrict filename) {
     }
     FTEnvelope *env = *result;
     printf("chip %s %s macro %d with %d steps\n",
-           expansion_names[env->chipid], macro_dim_names[env->parameter],
+           FT_expansion_names[env->chipid], FT_parameter_names[env->parameter],
            env->envid, env->env_length);
     hexdump(env->env_data, env->env_length, stdout);
   }
@@ -783,7 +841,7 @@ FTModule *FTModule_fromtxt(FILE *restrict infp, const char *restrict filename) {
   for (size_t i = 0; i < Gap_size(module->instruments); ++i) {
     FTPSGInstrument *inst = Gap_get(module->instruments, i);
     printf("%s instrument %zu with volume env %d, arpeggio env %d, pitch env %d, timbre %d\n",
-           expansion_names[inst->chipid], i, inst->envid_volume, inst->envid_arpeggio, inst->envid_pitch, inst->envid_timbre);
+           FT_expansion_names[inst->chipid], i, inst->envid_volume, inst->envid_arpeggio, inst->envid_pitch, inst->envid_timbre);
     if (inst->waves) {
       for (size_t w = 0; w < Gap_size(inst->waves); ++w) {
         hexdump(Gap_get(inst->waves, w), Gap_elSize(inst->waves), stdout);
@@ -802,10 +860,22 @@ FTModule *FTModule_fromtxt(FILE *restrict infp, const char *restrict filename) {
       printf("order row $%02zu: ", r);
       hexdump(order_row, Gap_elSize(s->order), stdout);
     }
+    for (size_t t = 0; t < Gap_size(s->patterns); ++t) {
+      GapList *track_patterns = *(GapList **)Gap_get(s->patterns, t);
+      printf("song %zu track %zu has %zu patterns\n",
+             i + 1U, t + 1U, Gap_size(track_patterns));
+      for (size_t p = 0; p < Gap_size(track_patterns); ++p) {
+        FTPatRow *rows = FTSong_get_row(s, t, p, 0);
+        for (size_t r = 0; r < s->rows_per_pattern; ++r) {
+          printf("%02zX:%02zX", p, r);
+          dump_pattern_row(&rows[r], 1);
+        }
+      }
+    }
   }
-
-  return module;
 }
+
+// Driver program ///////////////////////////////////////////////////
 
 int main(void) {
   const char *filename = "parsertest.txt";
@@ -818,6 +888,13 @@ int main(void) {
   }
   FTModule *module = FTModule_fromtxt(infp, filename);
   fclose(infp);
+  if (!module) {
+    fprintf(stderr, "%s: error loading\n", filename);
+    return EXIT_FAILURE;
+  }
+  // Dump parsed data
+  puts("Done parsing module");
+  FTModule_dump(module);
   FTModule_delete(module);
 
   return 0;

@@ -25,11 +25,13 @@ Sun 06-05
 1.75 h Parse effects; parse note, instrument, and volume all the way through a nontrivial piece
 4.5 h Stuff macro, instrument, wave, pattern header, and order table into a struct
 
+Mon 06-06
+.75 h Stuff pattern rows into a struct
+
 N.B.: remove time spent on "tentative" items if they don't end up in a deliverable
 
 immediate next steps
 --------------------
-Stuff pattern rows into a struct
 Generate metronome data from patterns
 Generate list of (tick, note-on) pairs
 Make hash table to look up instruments and macros
