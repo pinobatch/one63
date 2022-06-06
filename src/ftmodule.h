@@ -44,6 +44,7 @@ typedef struct {
 
 // Patterns /////////////////////////////////////////////////////////
 
+#define FTPAT_MAX_ROWS 256
 #define FTPAT_MAX_EFFECTS 4
 #define FT_MIN_CHANNELS 5
 #define FT_MAX_CHANNELS 28
@@ -75,11 +76,11 @@ typedef struct {
 
 typedef struct {
   char *title;  // owned; realloc() on change
-  GapList *order;  // GapList<GapList<uint8_t>> order[row][track]
-  GapList *patterns;  // GapList<GapList<FTPatRow>> patterns[track][orderid]
-  unsigned char start_tempo;
-  unsigned char start_speed;
+  GapList *order;  // GapList<unsigned char[nchannels]> order[row][track]
+  GapList *patterns;  // GapList<GapList<FTPatRow[rpp]>> patterns[track][patid][row]
   unsigned short rows_per_pattern;
+  unsigned char start_speed;
+  unsigned char start_tempo;
 } FTSong;
 
 typedef struct {

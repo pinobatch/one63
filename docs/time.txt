@@ -23,14 +23,18 @@ Mon 05-30
 
 Sun 06-05
 1.75 h Parse effects; parse note, instrument, and volume all the way through a nontrivial piece
-.25 h Ensure proposed structs compile
-3 h Stuff macro, instrument, and wave data into a struct
+4.5 h Stuff macro, instrument, wave, pattern header, and order table into a struct
 
 N.B.: remove time spent on "tentative" items if they don't end up in a deliverable
 
 immediate next steps
 --------------------
-Stuff track data into a struct
-Generate metronome data from track data
-Stuff instrument data into a struct
+Stuff pattern rows into a struct
+Generate metronome data from patterns
+Generate list of (tick, note-on) pairs
 Make hash table to look up instruments and macros
+Interpret volume envelopes
+Interpret timbre envelopes
+Interpret arpeggio envelopes
+Interpret pitch envelopes
+Interpret effects one by one as encountered

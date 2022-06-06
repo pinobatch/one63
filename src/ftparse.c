@@ -1,3 +1,7 @@
+/*
+parsing the FamiTracker module
+by Damian Yerrick
+*/
 #include <stdio.h>
 #include <stdlib.h>
 #include <ctype.h>
@@ -8,10 +12,21 @@
 #define FT_MAX_CHARS_PER_CHANNEL 27
 #define FT_MAX_LINE_LEN (16 + FT_MAX_CHANNELS * FT_MAX_CHARS_PER_CHANNEL)
 
+#define EXPECTED_INSTS 16
+#define EXPECTED_ENVS_PER_INST 2
+#define EXPECTED_SONGS 16
+#define EXPECTED_ORDER 16
+#define EXPECTED_PATTERNS 16
+
 const char WHITESPACE_CHARACTERS[] = " \t\n\v\f\r";
 
 const char *const expansion_names[] = {
   "VRC6", "VRC7", "FDS", "MMC5", "N163", "YM2149"
+};
+
+#define FT_2A03_NUM_CHANNELS 5
+const unsigned char channels_per_expansion[] = {
+  3, 6, 1, 2, 8, 3
 };
 
 const char *const macro_dim_names[] = {
@@ -289,13 +304,49 @@ void hexdump(const void *restrict start, size_t length, FILE *restrict fp) {
   if (chars_this_line) fputc('\n', fp);
 }
 
+void FTSong_unlink(FTSong *song) {
+  if (!song) return;
+  free(song->title);
+  Gap_delete(song->order);  // a list of fixed-length rows
+  while (!Gap_isEmpty(song->patterns)) {
+    GapList **result = Gap_get(song->patterns, 0);
+    GapList *trackPatterns = *result;
+    Gap_delete(trackPatterns);
+    Gap_remove(song->patterns, 0);
+  }
+  Gap_delete(song->patterns);
+  song->title = 0;
+  song->order = 0;
+  song->patterns = 0;
+}
+
+int FTSong_init(FTSong *song, size_t nchannels, size_t rows_per_pattern) {
+  if (rows_per_pattern > FTPAT_MAX_ROWS) return -1;
+  song->title = NULL;
+  song->order = Gap_new(nchannels, EXPECTED_ORDER);
+  song->patterns = Gap_new(sizeof(GapList *), nchannels);
+  song->rows_per_pattern = rows_per_pattern;
+  song->start_speed = 6;
+  song->start_tempo = 150;
+  if (!song->order || !song->patterns) goto on_bad_alloc;
+  for (size_t i = 0; i < nchannels; ++i) {
+    GapList *trackPatterns = Gap_new(rows_per_pattern * sizeof(FTPatRow), EXPECTED_PATTERNS);
+    if (!trackPatterns) goto on_bad_alloc;
+    if (!Gap_add(song->patterns, &trackPatterns)) goto on_bad_alloc;
+  }
+  return 0;
+
+on_bad_alloc:
+  FTSong_unlink(song);
+  return -1;
+}
+
 void FTModule_delete(FTModule *module) {
   if (!module) return;
   free(module->title);
   free(module->author);
   free(module->copyright);
-  Gap_delete(module->songs);
-  // Delete wave RAM data if any
+  // Delete instruments
   if (module->instruments) {
     while (!Gap_isEmpty(module->instruments)) {
       FTPSGInstrument *ws = Gap_get(module->instruments, 0);
@@ -304,7 +355,7 @@ void FTModule_delete(FTModule *module) {
     }
     Gap_delete(module->instruments);
   }
-  // Delete envelope data if any
+  // Delete envelopes
   if (module->all_envelopes) {
     while (!Gap_isEmpty(module->all_envelopes)) {
       FTEnvelope **ws = Gap_get(module->all_envelopes, 0);
@@ -313,12 +364,17 @@ void FTModule_delete(FTModule *module) {
     }
     Gap_delete(module->all_envelopes);
   }
+  // Delete songs
+  if (module->songs) {
+    while (!Gap_isEmpty(module->songs)) {
+      FTSong *song = Gap_get(module->songs, 0);
+      FTSong_unlink(song);
+      Gap_remove(module->songs, 0);
+    }
+    Gap_delete(module->songs);
+  }
   free(module);
 }
-
-#define EXPECTED_INSTS 16
-#define EXPECTED_ENVS_PER_INST 2
-#define EXPECTED_SONGS 16
 
 FTModule *FTModule_new(void) {
   FTModule *module = calloc(1, sizeof(FTModule));
@@ -337,6 +393,14 @@ FTModule *FTModule_new(void) {
     return 0;
   }
   return module;
+}
+
+size_t FTModule_count_channels(unsigned int expansion) {
+  size_t count = FT_2A03_NUM_CHANNELS;
+  for (size_t i = 0; i < FT_NUM_ENVPOOLS; ++i) {
+    if (expansion & (1 << i)) count += channels_per_expansion[i];
+  }
+  return count;
 }
 
 /**
@@ -395,7 +459,6 @@ unsigned char *FTModule_get_wave(FTModule *module, size_t instid,
   return Gap_get(inst->waves, waveid);
 }
 
-
 /**
  * @param infp a text file
  * @param filename a filename to display in error messages
@@ -405,7 +468,9 @@ FTModule *FTModule_fromtxt(FILE *restrict infp, const char *restrict filename) {
   FTModule *module = FTModule_new();
   if (!module) return 0;
   char linebuf[FT_MAX_LINE_LEN];
+
   size_t linenum = 0;
+  FTSong *cur_song = 0;
   
   while (fgets(linebuf, sizeof linebuf, infp)) {
     linenum += 1;
@@ -618,8 +683,19 @@ FTModule *FTModule_fromtxt(FILE *restrict infp, const char *restrict filename) {
           fprintf(stderr, "%s:%zu: %s: expected 3 params\n", filename, linenum, kw->name);
           break;
         }
-        printf("Add song, %ld rows per pattern, speed %ld, tempo %ld\n",
-               track_header[0], track_header[1], track_header[2]);
+        size_t nchannels = FTModule_count_channels(module->expansion);
+        FTSong newSong;
+        if (FTSong_init(&newSong, nchannels, track_header[0]) < 0) {
+          fprintf(stderr, "%s:%zu: out of memory for new song\n", filename, linenum);
+          break;
+        }
+        newSong.start_speed = track_header[1];
+        newSong.start_tempo = track_header[2];
+        if (!(cur_song = Gap_add(module->songs, &newSong))) {
+          FTSong_unlink(&newSong);
+          fprintf(stderr, "%s:%zu: out of memory for new song\n", filename, linenum);
+          break;
+        }
       } break;
       case FTKW_ORDER: {
         // hypermeasure id then colon then as many as there are rows in all chips
@@ -642,11 +718,11 @@ FTModule *FTModule_fromtxt(FILE *restrict infp, const char *restrict filename) {
           fprintf(stderr, "%s:%zu: order row length out of range\n", filename, linenum);
           break;
         }
-        printf("order row $%02lx:", first_value);
-        for (size_t i = 0; i < ncols; ++i) {
-          printf(" %02lx", pattern_ids[i]);
-        }
-        putchar('\n');
+        // XXX we ignore the hypermeasure ID, assuming they increment
+        // 99% sure this is ok
+        unsigned char ch_pattern_ids[FT_MAX_CHANNELS] = {0};
+        for (size_t i = 0; i < ncols; ++i) ch_pattern_ids[i] = pattern_ids[i];
+        Gap_add(cur_song->order, ch_pattern_ids);
       } break;
       case FTKW_PATTERN: {
         char *str_end;
@@ -715,6 +791,18 @@ FTModule *FTModule_fromtxt(FILE *restrict infp, const char *restrict filename) {
     }
   }
 
+  for (size_t i = 0; i < Gap_size(module->songs); ++i) {
+    FTSong *s = Gap_get(module->songs, i);
+
+    printf("song %zu: %u rows per pattern, speed %u, tempo %u, %zu order rows\n",
+           i + 1U, s->rows_per_pattern, s->start_speed, s->start_tempo,
+           Gap_size(s->order));
+    for (size_t r = 0; r < Gap_size(s->order); ++r) {
+      const unsigned char *order_row = Gap_get(s->order, r);
+      printf("order row $%02zu: ", r);
+      hexdump(order_row, Gap_elSize(s->order), stdout);
+    }
+  }
 
   return module;
 }
